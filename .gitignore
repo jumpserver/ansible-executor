@@ -1,0 +1,6 @@
+libnss_jms_executor.so.2
+test_nss
+__pycache__/
+*.py[cod]
+.DS_Store
+executor-secrets/

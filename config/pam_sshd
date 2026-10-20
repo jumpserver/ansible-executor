@@ -1,0 +1,6 @@
+# Public-key authentication is performed by OpenSSH, never by a PAM password.
+auth       required pam_deny.so
+account    required pam_permit.so
+password   required pam_deny.so
+session    required pam_mkhomedir.so skel=/etc/jms-executor/skel umask=0077 silent
+session    required pam_limits.so

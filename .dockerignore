@@ -1,0 +1,7 @@
+.git
+**/__pycache__
+**/*.pyc
+executor-secrets
+libnss_jms_executor.so.2
+test_nss
+.DS_Store

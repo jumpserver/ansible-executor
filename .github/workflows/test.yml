@@ -1,0 +1,25 @@
+name: Test SSH executor
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Linux OpenSSH test image and check NSS
+        run: docker build -f tests/Dockerfile -t jumpserver-executor-ssh:test .
+      - name: Check NSS with memory sanitizers
+        run: >-
+          docker run --rm --network none --entrypoint /bin/sh
+          jumpserver-executor-ssh:test -c
+          'make clean && make check CFLAGS="-O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer"'
+      - name: Run SSH and Ansible integration tests
+        run: python3 tests/integration.py
