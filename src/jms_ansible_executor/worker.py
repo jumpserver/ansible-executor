@@ -16,7 +16,10 @@ PATH_FIELDS = {
     'jms_custom_become_private_key_path', 'ca_cert', 'client_cert', 'client_key',
     'client_cert_key',
 }
-ENV_PATHS = {'ANSIBLE_CONFIG', 'ANSIBLE_LIBRARY', 'PYTHONPATH', 'ANSIBLE_ROLES_PATH'}
+ENV_PATHS = {
+    'ANSIBLE_CONFIG', 'ANSIBLE_LIBRARY', 'PYTHONPATH', 'ANSIBLE_ROLES_PATH',
+    'ANSIBLE_SSH_EXECUTABLE', 'ANSIBLE_SCP_EXECUTABLE', 'ANSIBLE_SFTP_EXECUTABLE',
+}
 
 
 class RelocatingWorker(Worker):

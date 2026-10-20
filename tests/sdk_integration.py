@@ -117,6 +117,35 @@ print('RUNTIME_DEPENDENCIES_OK')
             self.assertTrue(any(e.get('event_data', {}).get('res', {}).get('stdout')
                                 == 'RUNTIME_DEPENDENCIES_OK' for e in events), events)
 
+    def test_task_ssh_wrappers_are_executable_after_transfer(self):
+        with tempfile.TemporaryDirectory(prefix='jms source ') as root:
+            options = self.prepare(root)
+            wrappers = Path(root) / '.serialized-ssh'
+            wrappers.mkdir(mode=0o700)
+            for client in ('ssh', 'scp', 'sftp'):
+                wrapper = wrappers / client
+                wrapper.write_text('#!/bin/sh\nprintf WRAPPER_OK\n')
+                wrapper.chmod(0o700)
+                options['envvars'][f'ANSIBLE_{client.upper()}_EXECUTABLE'] = str(wrapper)
+            code = '''
+import os
+import subprocess
+for client in ('SSH', 'SCP', 'SFTP'):
+    wrapper = os.environ[f'ANSIBLE_{client}_EXECUTABLE']
+    result = subprocess.run(['sshpass', '-p', 'test-only', wrapper],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, (wrapper, result.stderr)
+    assert result.stdout == 'WRAPPER_OK'
+print('SSH_WRAPPERS_OK')
+'''
+            events = []
+            result = run(**self.options, **options, module='command',
+                         module_args='/usr/bin/python3 -c ' + shlex.quote(code),
+                         event_handler=events.append)
+            self.assertEqual(result.rc, 0, events)
+            self.assertTrue(any(e.get('event_data', {}).get('res', {}).get('stdout')
+                                == 'SSH_WRAPPERS_OK' for e in events), events)
+
     def test_streaming_cancellation_timeout_and_uid_reuse(self):
         with tempfile.TemporaryDirectory() as root:
             options = self.prepare(root)

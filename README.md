@@ -62,12 +62,15 @@ ssh-keygen -q -t ed25519 -N '' -f executor-secrets/client
 docker run -d --name jms-ansible-executor \
   --security-opt no-new-privileges:true \
   --memory 1g --pids-limit 256 \
-  --tmpfs /run --tmpfs /home/jms-executor \
+  --tmpfs /run --tmpfs /home/jms-executor:exec,nosuid,nodev \
   --mount type=volume,src=jms-executor-host-key,dst=/var/lib/jms-executor \
   --mount "type=bind,src=$PWD/executor-secrets/client.pub,dst=/run/secrets/jms-executor.pub,readonly" \
   -p 127.0.0.1:2222:2222 \
   jumpserver/ansible-executor-ssh:latest
 ```
+
+任务目录需要 `exec`，用于运行随任务上传的 SSH 包装脚本等文件；
+保留 `nosuid,nodev` 和 `no-new-privileges`，任务仍以独立的非 root UID 执行。
 
 通过可信部署通道取得 host key，而不是关闭 host key 检查：
 

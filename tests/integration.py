@@ -36,7 +36,8 @@ class ExecutorSSHTest(unittest.TestCase):
         run(
             'docker', 'run', '-d', '--name', cls.name, '--security-opt', 'no-new-privileges:true',
             '--pids-limit', '256', '--memory', '1g',
-            '--tmpfs', '/run', '--tmpfs', '/home/jms-executor', '--tmpfs', '/var/lib/jms-executor',
+            '--tmpfs', '/run', '--tmpfs', '/home/jms-executor:exec,nosuid,nodev',
+            '--tmpfs', '/var/lib/jms-executor',
             '--mount', f'type=bind,src={cls.key}.pub,dst=/run/secrets/jms-executor.pub,readonly',
             '-e', 'EXECUTOR_SERVICE_SECRET=must-not-reach-jobs',
             '-p', '127.0.0.1::2222', IMAGE,
