@@ -123,10 +123,11 @@ class ExecutorSSHTest(unittest.TestCase):
         }]
         payload = {
             'project/main.yml': json.dumps(playbook),
-            'inventory/hosts': json.dumps({'all': {'hosts': {'localhost': {
+            'inventory/hosts': json.dumps({'all': {'hosts': {'executor_test': {
                 'ansible_connection': 'local', 'ansible_python_interpreter': '/usr/bin/python3',
             }}}}),
-            'env/envvars': json.dumps(envvars or {}),
+            # Core's fork permits localhost only for trusted system automation.
+            'env/envvars': json.dumps({'ANSIBLE_SUPER_MODE': '1', **(envvars or {})}),
         }
         create_inputs = (
             'import json, pathlib, sys; root=pathlib.Path(sys.argv[1]); '

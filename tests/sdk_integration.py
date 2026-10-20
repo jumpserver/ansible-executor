@@ -25,14 +25,16 @@ class SDKTest(unittest.TestCase):
         root = Path(root)
         (root / 'inventory').mkdir()
         inventory = root / 'inventory/hosts'
-        inventory.write_text(json.dumps({'all': {'hosts': {'localhost': {
+        inventory.write_text(json.dumps({'all': {'hosts': {'executor_test': {
             'ansible_connection': 'local', 'ansible_python_interpreter': '/usr/bin/python3',
             'ansible_ssh_private_key_file': str(root / 'credential'),
             'literal_path': str(root / 'must-not-rewrite'),
         }}}}))
         (root / 'credential').write_text('test-credential')
         (root / 'project').mkdir()
-        return dict(private_data_dir=str(root), inventory=str(inventory), host_pattern='all')
+        # These trusted localhost fixtures use Core's system automation mode.
+        return dict(private_data_dir=str(root), inventory=str(inventory), host_pattern='all',
+                    envvars={'ANSIBLE_SUPER_MODE': '1'})
 
     def test_adhoc_and_failed_playbook_return_events_and_rc(self):
         with tempfile.TemporaryDirectory() as root:
@@ -80,24 +82,66 @@ m.exit_json(changed=False, msg='CUSTOM_OK')
                 }}],
             }]))
             events = []
+            options['envvars']['ANSIBLE_LIBRARY'] = str(modules)
             result = run(**self.options, **options, playbook='main.yml',
-                         envvars={'ANSIBLE_LIBRARY': str(modules)}, event_handler=events.append)
+                         event_handler=events.append)
             self.assertEqual(result.rc, 0, events)
             self.assertTrue(any(e.get('event_data', {}).get('res', {}).get('msg') == 'CUSTOM_OK'
                                 for e in events))
 
+    def test_business_drivers_and_collections_available_to_task(self):
+        code = '''
+import importlib
+import json
+import subprocess
+for name in ('boto3', 'botocore', 's3transfer', 'paramiko', 'passlib', 'sshtunnel',
+             'winrm', 'telnetlib3', 'MySQLdb', 'psycopg2', 'pymssql', 'pymongo',
+             'oracledb', 'pyfreerdp'):
+    importlib.import_module(name)
+from passlib.hash import bcrypt
+assert bcrypt.verify('runtime-check', bcrypt.hash('runtime-check'))
+modules = ('ansible.windows.win_ping', 'community.mysql.mysql_info',
+           'community.postgresql.postgresql_ping', 'amazon.aws.ec2_instance_info')
+docs = subprocess.run(['ansible-doc', '--json', *modules],
+                      check=True, capture_output=True, text=True)
+assert set(modules) <= json.loads(docs.stdout).keys()
+print('RUNTIME_DEPENDENCIES_OK')
+'''
+        with tempfile.TemporaryDirectory() as root:
+            options = self.prepare(root)
+            events = []
+            result = run(**self.options, **options, module='command',
+                         module_args='/usr/bin/python3 -c ' + shlex.quote(code),
+                         event_handler=events.append)
+            self.assertEqual(result.rc, 0, events)
+            self.assertTrue(any(e.get('event_data', {}).get('res', {}).get('stdout')
+                                == 'RUNTIME_DEPENDENCIES_OK' for e in events), events)
+
     def test_streaming_cancellation_timeout_and_uid_reuse(self):
         with tempfile.TemporaryDirectory() as root:
             options = self.prepare(root)
+            (Path(root) / 'project/main.yml').write_text(json.dumps([{
+                'hosts': 'all', 'gather_facts': False, 'tasks': [
+                    {'ansible.builtin.debug': {'msg': 'LIVE_LOG_BEFORE_STOP'}},
+                    {'name': 'Wait for cancellation', 'ansible.builtin.command': 'sleep 60'},
+                ],
+            }]))
             cancel = threading.Event()
             caller = threading.get_ident()
+            output = []
             def event_handler(event):
                 self.assertEqual(threading.get_ident(), caller)
-                if event['event'] == 'runner_on_start':
+                if event.get('stdout'):
+                    output.append(event['stdout'])
+                if (event['event'] == 'runner_on_start'
+                        and event.get('event_data', {}).get('task') == 'Wait for cancellation'):
+                    self.assertIn('LIVE_LOG_BEFORE_STOP', '\n'.join(output))
                     cancel.set()
-            result = run(**self.options, **options, module='command', module_args='sleep 60',
+            started = time.monotonic()
+            result = run(**self.options, **options, playbook='main.yml',
                          event_handler=event_handler, cancel_callback=cancel.is_set)
             self.assertEqual(result.status, 'canceled')
+            self.assertLess(time.monotonic() - started, 30)
         Fixture.wait_removed('/home/jms-executor/jms_10')
         with tempfile.TemporaryDirectory() as root:
             options = self.prepare(root)

@@ -46,14 +46,16 @@ namespace 或每任务 cgroup。默认 `/proc` 下，其他用户的进程名称
 
 ## 构建运行
 
-Dockerfile 直接基于通用 `debian:trixie-slim` 构建，不依赖现成的 JumpServer
-镜像或 Core 源码。镜像提供 OpenSSH、PAM、NSS 插件、Python、`ansible-core`、
-`ansible-runner`、SSH 客户端和 `sshpass`。当前入口使用 Runner 的流式 worker
-协议，因此只安装 `ansible` / `ansible-core` 不够，还需要 `ansible-runner`。
-默认构建不包含编译器和测试源码。以下命令均从本仓库根目录执行。
+Dockerfile 默认基于 `debian:trixie-slim` 构建，不依赖旧的 JumpServer Docker
+执行镜像或 Core 源码。可用 `--build-arg BASE_IMAGE=你的镜像:版本` 替换兼容
+Debian 的基础镜像；构建和运行阶段使用同一基础环境。其他发行版还需适配
+系统包安装及 PAM/NSS 配置。
+镜像提供 OpenSSH、PAM、NSS 插件、Python、JumpServer 定制的 Ansible/Runner、
+业务 Collections 和驱动。默认构建不包含编译器、wheel 缓存和测试源码。
+以下命令均从本仓库根目录执行。
 
 ```sh
-docker build -t jumpserver/ansible-executor-ssh:local .
+docker build -t jumpserver/ansible-executor-ssh:latest .
 
 mkdir -m 700 executor-secrets
 ssh-keygen -q -t ed25519 -N '' -f executor-secrets/client
@@ -64,7 +66,7 @@ docker run -d --name jms-ansible-executor \
   --mount type=volume,src=jms-executor-host-key,dst=/var/lib/jms-executor \
   --mount "type=bind,src=$PWD/executor-secrets/client.pub,dst=/run/secrets/jms-executor.pub,readonly" \
   -p 127.0.0.1:2222:2222 \
-  jumpserver/ansible-executor-ssh:local
+  jumpserver/ansible-executor-ssh:latest
 ```
 
 通过可信部署通道取得 host key，而不是关闭 host key 检查：
@@ -97,18 +99,23 @@ ansible-runner transmit ./job -p main.yml \
 
 ## 作业依赖
 
-通用镜像支持 Ansible 内置模块，不预装全部业务依赖：
+`requirements-runtime.txt` 定义镜像内的业务依赖，包括 JumpServer Ansible
+`v2.16.18.5`、Runner `v2.4.0.2`、`ansible==9.13.0` 提供的 Collections，
+以及 AWS、MySQL、PostgreSQL、SQL Server、MongoDB、Oracle、WinRM、RDP 等驱动。
+系统运行库和编译依赖分别放在 Dockerfile 的 `base`、`build` 阶段。
+Python 包在构建时安装，任务运行时不修改公共环境。
+定制版 Ansible 默认限制 localhost/local connection；受信任的系统自动化
+任务可单独传入 `ANSIBLE_SUPER_MODE=1`，不要在容器中全局开启。
 
-- 额外 collections / roles：随任务打包，或者制作派生镜像预安装。
-- JumpServer 自定义模块：由调用方随任务传递，并为当前任务配置模块搜索路径；
-  SSH 后端接入时也要重写模块、私钥和上传文件的远端路径。
-- 数据库、WinRM 等驱动：例如 `pymssql`、`psycopg2`、`oracledb`、`pywinrm`，
-  以及它们依赖的系统库，按实际作业需要安装到派生镜像。
-- Core 使用的 JumpServer Ansible/Runner 分支与这里的上游版本不是同一套依赖。
-  集成前需要验证兼容性；如依赖特定分支，应在派生镜像中安装匹配版本。
+`pyproject.toml` 继续只声明 SDK/执行器程序自身的依赖，Core 安装 SDK 不会
+因此安装所有业务驱动。JumpServer 自定义模块仍由 Core 随任务传入，以保证
+模块与 Playbook 一致。清单之外的 Collections、roles 或驱动需按业务补充。
 
-默认 Runner 为 `2.4.0`，可通过 `--build-arg ANSIBLE_RUNNER_VERSION=...` 指定
-其他上游版本。控制端和执行端应使用匹配的 Runner 版本；版本变更后重跑集成测试。
+镜像统一使用 `jumpserver/ansible-executor-ssh:latest`，独立于 Core 发版。
+运行依赖或执行器变化后重建镜像，发布前回归任务执行、日志、停止及主要业务。
+升级时显式拉取并重新创建容器；离线部署需加载更新后的镜像，不能只检查
+本地是否存在 `latest`。部署记录应保留源码提交和镜像 digest，以便定位和回退。
+CPU 兼容范围需要在目标硬件上验证，`linux/amd64` 标签不代表具体指令集基线。
 
 ## UID 生命周期与 Core 接入
 
@@ -157,8 +164,8 @@ result = run(
 assert result.rc == 0
 ```
 
-已验证 Core 的 Runner 2.4.0.2 和执行端上游 Runner 2.4.0 的 AdHoc、Playbook、
-上传、私钥路径及自定义模块兼容。SDK 迁移已知的 inventory 凭据字段、模块环境
+集成测试覆盖上游 Runner 2.4.0 和 Core 的 Runner 2.4.0.2 客户端与当前执行镜像
+的 AdHoc、Playbook、上传、私钥路径及自定义模块兼容。SDK 迁移已知的 inventory 凭据字段、模块环境
 路径和 copy 的本地 src，保留目的地址及普通业务值。所有输入必须预先放在任务
 目录；不会自动读取或打包 Core 任意路径。Core 的完整配置和网域隧道要求见其
 `utils/ansible_executor/ssh-backend.md`。
