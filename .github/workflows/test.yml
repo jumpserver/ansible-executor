@@ -19,8 +19,8 @@ jobs:
           python-version: '3.12'
       - name: Install SDK and test client
         run: python3 -m pip install . 'ansible-runner==2.4.0'
-      - name: Reject unsafe event and artifact streams
-        run: python3 -m unittest discover -s tests -p 'test_protocol.py' -v
+      - name: Check task paths and reject unsafe event and artifact streams
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
       - name: Build Linux OpenSSH test image and check NSS
         run: docker build --target test -t jumpserver-executor-ssh:test .
       - name: Build production image

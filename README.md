@@ -168,8 +168,9 @@ assert result.rc == 0
 ```
 
 集成测试覆盖上游 Runner 2.4.0 和 Core 的 Runner 2.4.0.2 客户端与当前执行镜像
-的 AdHoc、Playbook、上传、私钥路径及自定义模块兼容。SDK 迁移已知的 inventory 凭据字段、模块环境
-路径和 copy 的本地 src，保留目的地址及普通业务值。所有输入必须预先放在任务
+的 AdHoc、Playbook、上传、私钥路径及自定义模块兼容。执行端迁移已知的 inventory
+凭据字段、网关 ProxyCommand 的 `-i` 私钥路径、SSH 包装脚本、模块环境路径和 copy
+的本地 src，保留目的地址及普通业务值。所有输入必须预先放在任务
 目录；不会自动读取或打包 Core 任意路径。Core 的完整配置和网域隧道要求见其
 `utils/ansible_executor/ssh-backend.md`。
 
@@ -186,7 +187,7 @@ SSH 权限测试依赖 Python 标准库、Docker CLI、ssh 和 ssh-keygen；SDK 
 ```sh
 docker build --target test -t jumpserver-executor-ssh:test .
 python3 -m pip install .
-python3 -m unittest discover -s tests -p 'test_protocol.py' -v
+python3 -m unittest discover -s tests -p 'test_*.py' -v
 python3 tests/integration.py
 python3 tests/sdk_integration.py
 ```

@@ -68,11 +68,42 @@ class RelocatingWorker(Worker):
 
     def inventory_paths(self, value):
         if isinstance(value, dict):
-            return {key: self.relocate(item) if key in PATH_FIELDS else self.inventory_paths(item)
-                    for key, item in value.items()}
+            result = {}
+            for key, item in value.items():
+                if key in PATH_FIELDS:
+                    result[key] = self.relocate(item)
+                elif key == 'ansible_ssh_common_args':
+                    result[key] = self.proxy_key_paths(item)
+                else:
+                    result[key] = self.inventory_paths(item)
+            return result
         if isinstance(value, list):
             return [self.inventory_paths(item) for item in value]
         return value
+
+    def proxy_key_paths(self, value):
+        if not isinstance(value, str):
+            return value
+        arguments = shlex.split(value)
+        changed = False
+        for index, argument in enumerate(arguments):
+            option = argument[2:] if argument.startswith('-o') else argument
+            name, separator, command = option.partition('=')
+            if not separator or name.lower() != 'proxycommand':
+                continue
+            parts = shlex.split(command)
+            for position in range(1, len(parts)):
+                if parts[position - 1] != '-i':
+                    continue
+                # Core escapes literal percent signs for OpenSSH's token expansion.
+                original = parts[position].replace('%%', '%')
+                relocated = self.relocate(original)
+                if relocated != original:
+                    parts[position] = relocated.replace('%', '%%')
+                    changed = True
+            prefix = '-o' if argument.startswith('-o') else ''
+            arguments[index] = prefix + name + '=' + shlex.join(parts)
+        return shlex.join(arguments) if changed else value
 
     def update_paths(self, kwargs):
         # Every received task remains under the UID selected by sshd; no nested runtime.
