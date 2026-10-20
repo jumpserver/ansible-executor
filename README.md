@@ -44,15 +44,14 @@ namespace 或每任务 cgroup。默认 `/proc` 下，其他用户的进程名称
 
 ## 构建运行
 
-生产 Dockerfile 扩展已有的 Fedora 43 Ansible EE，保留该镜像的 JumpServer
-Ansible/Runner 分支、自定义模块及数据库驱动。请先准备与 Core 版本匹配的
-`jumpserver/ansible-executor` 基础镜像；本仓库构建 SSH 执行层，不重复维护
-Core 中的 EE 构建资源。基础镜像可通过 `ANSIBLE_EE_IMAGE` 构建参数指定。
-以下命令均从本仓库根目录执行。
+Dockerfile 直接基于通用 `debian:trixie-slim` 构建，不依赖现成的 JumpServer
+镜像或 Core 源码。镜像提供 OpenSSH、PAM、NSS 插件、Python、`ansible-core`、
+`ansible-runner`、SSH 客户端和 `sshpass`。当前入口使用 Runner 的流式 worker
+协议，因此只安装 `ansible` / `ansible-core` 不够，还需要 `ansible-runner`。
+默认构建不包含编译器和测试源码。以下命令均从本仓库根目录执行。
 
 ```sh
-docker build --build-arg ANSIBLE_EE_IMAGE=jumpserver/ansible-executor:latest \
-  -t jumpserver/ansible-executor-ssh:local .
+docker build -t jumpserver/ansible-executor-ssh:local .
 
 mkdir -m 700 executor-secrets
 ssh-keygen -q -t ed25519 -N '' -f executor-secrets/client
@@ -94,6 +93,21 @@ ansible-runner transmit ./job -p main.yml \
 该管道用于演示传输。业务调用方还需要检查各阶段状态和 Runner 的任务 rc，
 处理超时、断线、取消、实时事件，以及上传文件、私钥等的路径映射。
 
+## 作业依赖
+
+通用镜像支持 Ansible 内置模块，不预装全部业务依赖：
+
+- 额外 collections / roles：随任务打包，或者制作派生镜像预安装。
+- JumpServer 自定义模块：由调用方随任务传递，并为当前任务配置模块搜索路径；
+  SSH 后端接入时也要重写模块、私钥和上传文件的远端路径。
+- 数据库、WinRM 等驱动：例如 `pymssql`、`psycopg2`、`oracledb`、`pywinrm`，
+  以及它们依赖的系统库，按实际作业需要安装到派生镜像。
+- Core 使用的 JumpServer Ansible/Runner 分支与这里的上游版本不是同一套依赖。
+  集成前需要验证兼容性；如依赖特定分支，应在派生镜像中安装匹配版本。
+
+默认 Runner 为 `2.4.0`，可通过 `--build-arg ANSIBLE_RUNNER_VERSION=...` 指定
+其他上游版本。控制端和执行端应使用匹配的 Runner 版本；版本变更后重跑集成测试。
+
 ## UID 生命周期与 Core 接入
 
 此插件不修改现有 Core 的执行后端，也不自动关闭 `ANSIBLE_DOCKER_ENABLED`。
@@ -111,12 +125,12 @@ ansible-runner transmit ./job -p main.yml \
 
 ## 验证
 
-测试 Dockerfile 基于 Debian，使用真实 OpenSSH、PAM、glibc 和 Ansible。
+测试目标直接扩展生产运行层，使用相同的 OpenSSH、PAM、glibc 和 Ansible，
+只额外安装编译器及复制源码用于 NSS 内存检查。
 测试客户端只依赖宿主机的 Python 标准库、Docker CLI、ssh 和 ssh-keygen。
 
 ```sh
-docker build -f tests/Dockerfile \
-  -t jumpserver-executor-ssh:test .
+docker build --target test -t jumpserver-executor-ssh:test .
 python3 tests/integration.py
 ```
 
@@ -126,5 +140,6 @@ python3 tests/integration.py
 命令拼接和转发；真实 Runner 传输/执行/事件返回；跨 UID 私有文件和环境变量
 读取被拒绝；任务环境不继承服务秘密、不污染后续会话。
 
-Debian 测试使用上游 Runner 2.4.0；生产镜像沿用已有 EE 的 JumpServer 分支。
-Fedora 镜像和 Core 接入仍应在目标部署中验证。
+生产与测试均默认使用上游 Runner 2.4.0。此测试覆盖通用 Ansible 执行及 UID
+权限边界，不能替代 JumpServer 专用模块和业务作业的兼容性验证。
+CI 还会构建默认生产镜像，并用该镜像运行同一套集成测试。

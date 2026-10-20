@@ -1,15 +1,21 @@
-# The Ansible EE is built with the matching JumpServer Core version.
-ARG ANSIBLE_EE_IMAGE=jumpserver/ansible-executor:latest
-FROM quay.io/fedora/fedora:43 AS nss-build
-RUN dnf install -y gcc make glibc-devel && dnf clean all
+FROM debian:trixie-slim AS nss-build
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc make libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
 COPY . /src
 WORKDIR /src
-RUN make check && make && make install DESTDIR=/out
+RUN make check && make install LIBDIR=/usr/lib DESTDIR=/out
 
-FROM ${ANSIBLE_EE_IMAGE}
-USER root
-RUN dnf install -y openssh-server openssh-clients pam util-linux \
-    && dnf clean all
+FROM debian:trixie-slim AS runtime
+ARG ANSIBLE_RUNNER_VERSION=2.4.0
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        openssh-server openssh-client sshpass libpam-modules \
+        python3 python3-pip ansible-core ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -f /etc/ssh/ssh_host_* \
+    && python3 -m pip install --break-system-packages --no-cache-dir \
+        "ansible-runner==${ANSIBLE_RUNNER_VERSION}"
 COPY --from=nss-build /out/ /
 RUN /usr/local/libexec/jms-executor-start --configure-nss \
     && mkdir -p /etc/jms-executor/skel \
@@ -17,3 +23,15 @@ RUN /usr/local/libexec/jms-executor-start --configure-nss \
 EXPOSE 2222
 ENTRYPOINT ["/usr/local/libexec/jms-executor-start"]
 CMD []
+
+# Test the production runtime, adding only the tools needed for NSS sanitizers.
+FROM runtime AS test
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc make libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY . /src
+WORKDIR /src
+RUN make check
+
+# The default build excludes the compiler and test sources.
+FROM runtime AS final

@@ -1,6 +1,6 @@
 """Run against a real sshd in an ephemeral Linux container; stdlib-only client.
 
-Build tests/Dockerfile first, then run this file with Python 3 on the Docker host.
+Build the Dockerfile's test target, then run this file with Python 3 on the Docker host.
 All keys, containers, job inputs and outputs created here are test-only.
 """
 from concurrent.futures import ThreadPoolExecutor

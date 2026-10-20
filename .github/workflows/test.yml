@@ -15,11 +15,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build Linux OpenSSH test image and check NSS
-        run: docker build -f tests/Dockerfile -t jumpserver-executor-ssh:test .
+        run: docker build --target test -t jumpserver-executor-ssh:test .
+      - name: Build production image
+        run: docker build -t jumpserver-executor-ssh:runtime .
       - name: Check NSS with memory sanitizers
         run: >-
           docker run --rm --network none --entrypoint /bin/sh
           jumpserver-executor-ssh:test -c
           'make clean && make check CFLAGS="-O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer"'
       - name: Run SSH and Ansible integration tests
+        env:
+          JMS_EXECUTOR_TEST_IMAGE: jumpserver-executor-ssh:runtime
         run: python3 tests/integration.py
