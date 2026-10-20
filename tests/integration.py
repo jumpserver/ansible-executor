@@ -4,6 +4,7 @@ Build the Dockerfile's test target, then run this file with Python 3 on the Dock
 All keys, containers, job inputs and outputs created here are test-only.
 """
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -85,6 +86,30 @@ class ExecutorSSHTest(unittest.TestCase):
         )
 
     @classmethod
+    @contextmanager
+    def lease(cls, user):
+        process = subprocess.Popen(
+            [*cls.ssh_options, '-i', str(cls.key), f'{user}@127.0.0.1',
+             'jms-executor-run ' + str(uuid.uuid4())],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        try:
+            hello = json.loads(process.stdout.readline())
+            assert hello['uid'] == 100000 + int(user[4:])
+            yield process
+        finally:
+            process.terminate()
+            process.communicate(timeout=10)
+
+    @classmethod
+    def wait_removed(cls, path):
+        for _ in range(100):
+            if cls.container('test', '-e', path, check=False).returncode:
+                return
+            time.sleep(0.05)
+        raise AssertionError('Session cleanup did not remove ' + path)
+
+    @classmethod
     def job(cls, user, code, envvars=None):
         """Exercise the full transmit -> SSH worker -> process protocol."""
         job_id = uuid.uuid4().hex
@@ -162,7 +187,10 @@ class ExecutorSSHTest(unittest.TestCase):
         self.assertNotEqual(forwarded.returncode, 0)
 
     def test_real_ansible_jobs_cannot_read_other_uid_files_or_environment(self):
-        self.ssh('jms_2', 'jms-executor-info')
+        with self.lease('jms_2'):
+            self.check_cross_uid_isolation()
+
+    def check_cross_uid_isolation(self):
         holder = (
             'import os,pathlib,time; home=pathlib.Path("/home/jms-executor/jms_2"); '
             '(home/"secret").write_text("user-b-secret"); '
@@ -221,17 +249,66 @@ print('ISOLATION_OK')
         second = self.job('jms_4', 'import os; assert "JOB_SECRET" not in os.environ')
         self.assertEqual(second['rc'], 0, json.dumps(second))
 
-    def test_symlinked_temporary_directory_is_rejected(self):
-        self.ssh('jms_5', 'jms-executor-info')
+    def test_stale_home_is_cleaned_without_following_symlinks(self):
+        self.wait_removed('/home/jms-executor/jms_5')
         replace_temp = (
-            'import pathlib; p=pathlib.Path("/home/jms-executor/jms_5/tmp"); '
-            'p.rmdir(); p.symlink_to("/home/jms-executor/jms_2", target_is_directory=True)'
+            'import pathlib; home=pathlib.Path("/home/jms-executor/jms_5"); '
+            'home.mkdir(); (home/"tmp").symlink_to("/etc", target_is_directory=True)'
         )
-        run('docker', 'exec', '-u', '100005:100005', self.name,
-            '/usr/bin/python3', '-c', replace_temp)
+        self.container('/usr/bin/python3', '-c', replace_temp)
         result = self.ssh('jms_5', 'jms-executor-info', check=False)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(b'private temporary directory', result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.container('test', '-f', '/etc/passwd').returncode, 0)
+        self.wait_removed('/home/jms-executor/jms_5')
+
+    def test_same_uid_cannot_open_two_sessions_and_disconnect_cleans_daemons(self):
+        with self.lease('jms_8'):
+            self.assertNotEqual(self.ssh('jms_8', 'jms-executor-info', check=False).returncode, 0)
+            run('docker', 'exec', '-u', '100008:100008', self.name,
+                '/usr/bin/python3', '-c',
+                'import pathlib; p=pathlib.Path("/tmp/jms-shared-test"); p.mkdir(); '
+                '(p/"secret").write_text("old-task"); (p/"link").symlink_to("/etc/passwd"); '
+                'pathlib.Path("/dev/shm/jms-secret").write_text("old-task")')
+            run('docker', 'exec', '-d', '-u', '100008:100008', self.name,
+                '/usr/bin/python3', '-c',
+                'import os,time,sys\nif os.fork(): sys.exit(0)\nos.setsid()\n'
+                'open("/home/jms-executor/jms_8/daemon.pid","w").write(str(os.getpid()))\n'
+                'time.sleep(80)')
+            for _ in range(50):
+                started = self.container('test', '-f', '/home/jms-executor/jms_8/daemon.pid', check=False)
+                if started.returncode == 0:
+                    break
+                time.sleep(0.05)
+            self.assertEqual(started.returncode, 0)
+        self.wait_removed('/home/jms-executor/jms_8')
+        self.wait_removed('/tmp/jms-shared-test')
+        self.wait_removed('/dev/shm/jms-secret')
+        self.container('test', '-f', '/etc/passwd')
+        alive = self.container('/usr/bin/python3', '-c',
+            'import pathlib; print([p.name for p in pathlib.Path("/proc").iterdir() '
+            'if p.name.isdecimal() and p.stat().st_uid == 100008 '
+            'and "State:\\tZ" not in (p/"status").read_text()])')
+        self.assertEqual(alive.stdout.strip(), b'[]')
+        self.assertEqual(self.ssh('jms_8', 'jms-executor-info').returncode, 0)
+
+    def test_orphan_process_is_killed_before_uid_reuse(self):
+        self.container('/usr/bin/python3', '-c',
+            'import pathlib,os; home=pathlib.Path("/home/jms-executor/jms_9"); '
+            'home.mkdir(mode=0o700); os.chown(home,100009,100009)')
+        run('docker', 'exec', '-d', '-u', '100009:100009', self.name,
+            '/usr/bin/python3', '-c',
+            'import os,pathlib,time,sys\nif os.fork(): sys.exit(0)\nos.setsid()\n'
+            'pathlib.Path("/home/jms-executor/jms_9/orphan.pid").write_text(str(os.getpid()))\n'
+            'time.sleep(80)')
+        for _ in range(50):
+            orphan = self.container('cat', '/home/jms-executor/jms_9/orphan.pid', check=False)
+            if orphan.returncode == 0:
+                break
+            time.sleep(0.05)
+        self.assertEqual(orphan.returncode, 0)
+        self.assertEqual(self.ssh('jms_9', 'jms-executor-info').returncode, 0)
+        status = self.container('cat', f'/proc/{int(orphan.stdout)}/status', check=False)
+        self.assertTrue(status.returncode != 0 or b'State:\tZ' in status.stdout)
 
 
 if __name__ == '__main__':

@@ -2,7 +2,8 @@
 
 此仓库实现专用 Ansible 执行容器的 **glibc NSS 插件**，配合未修改的 OpenSSH
 使用。公钥认证交给 OpenSSH，身份查询交给 NSS，首次登录的家目录创建使用标准
-`pam_mkhomedir`。无需自定义 PAM 认证模块，也不需要给 OpenSSH 打补丁。
+`pam_mkhomedir`。另外通过小型 PAM **session** 模块管理任务 UID 的独占和清理；
+认证仍交给 OpenSSH，无需给 OpenSSH 打补丁。
 
 新增执行身份不需要 `useradd`、密码、逐用户公钥或写入 `/etc/passwd`：
 
@@ -21,7 +22,7 @@ NSS 查询无副作用，错误密钥的探测不会创建家目录。全量枚�
 
 - 所有虚拟用户使用同一份部署公钥。对应私钥 **只能由受信任的 Celery 服务持有**，
   不能交给平台终端用户或放入任务环境。持有此私钥就能选择任何虚拟身份，
-  因此业务授权及用户/任务到身份编号的映射必须由 Core/Celery 控制。
+  因此业务授权必须由 Core/Celery 控制；SDK 按任务选择临时执行编号。
 - 每套部署生成独立服务密钥，镜像不含任何客户端私钥或预置通用服务公钥。
   启动时只读挂载公钥；同一文件可列出多把公钥，便于轮换。
 - SSH host key 保存在 `/var/lib/jms-executor`；该卷应持久化，客户端固定校验
@@ -30,7 +31,8 @@ NSS 查询无副作用，错误密钥的探测不会创建家目录。全量枚�
   SSH 会话按虚拟 UID/GID 运行；入口验证无额外组及有效/许可/ambient capabilities，
   设置 `no_new_privs`，再用白名单重建环境。代码和认证配置只允许 root 修改。
 - 不提供交互 shell、PTY、SFTP、用户 rc、用户环境配置、agent 或端口转发。
-  只接受原样的 `ansible-runner worker`，以及只读探测命令 `jms-executor-info`。
+  只接受托管命令 `jms-executor-run <UUID>`、兼容命令 `ansible-runner worker`，
+  以及只读探测命令 `jms-executor-info`。
   Runner 的标准流二进制协议可以通过 SSH stdin/stdout 传输。
 - 容器启动需要 **容器内 root** 以便 sshd 降权、PAM 创建家目录；不需要
   `--privileged`、`SYS_ADMIN`、Docker socket 或宿主机 PID namespace。
@@ -110,15 +112,56 @@ ansible-runner transmit ./job -p main.yml \
 
 ## UID 生命周期与 Core 接入
 
-此插件不修改现有 Core 的执行后端，也不自动关闭 `ANSIBLE_DOCKER_ENABLED`。
-当前 Core 仍然使用原来的 Runner；切换到 SSH 后端需要单独接入。
+仓库同时提供可安装的 Python SDK `jms-ansible-executor`。Core 的 SSH Runner
+适配器使用该 SDK，原有原生 / Docker 后端仍可选择。配套 Core 的配置示例：
 
-推荐由调度方为每个作业分配独立编号，而不是把同一用户所有不同授权的作业
-放到同一 UID。**同一编号始终代表同一 UID**，NSS 不负责调度、并发锁或清理。
-不要把尚有文件或后台进程的 UID 分给另一个安全主体。Runner 正常结束会清理
-其默认临时工作目录，但任意 Playbook 仍可写入其他私有文件或启动后台进程；
-断开 SSH 也不能替代完整清理。UID 回收前需要受信任的管理进程确认所有相关
-进程已退出并删除私有数据。此版本没有提供 UID 回收接口。
+```yaml
+ANSIBLE_EXECUTION_BACKEND: ssh
+ANSIBLE_EXECUTOR_HOST: ansible-executor
+ANSIBLE_EXECUTOR_PORT: 2222
+ANSIBLE_EXECUTOR_PRIVATE_KEY: /run/secrets/executor_client
+ANSIBLE_EXECUTOR_KNOWN_HOSTS: /run/secrets/executor_known_hosts
+# 使用 Core 网域隧道时，设置为执行容器可访问的 Celery 地址。
+# ANSIBLE_EXECUTOR_GATEWAY_HOST: celery-ansible
+```
+
+SDK 为每个任务单独连接并选择编号。服务端 PAM session 模块在 root monitor 中
+持有 UID 独占锁；并发复用同一个 UID 会被拒绝，SDK 最多尝试 16 个候选编号。
+任务拿到服务端租用确认前不发送目录或凭据。家目录在任务结束、取消、断连后
+删除，并使用 pidfd 清理该 UID 的全部残留进程（包括 setsid 后台进程），再释放
+锁。登录前也做清理，恢复崩溃 monitor 留下的进程和私有文件。进程清理失败或
+文件无法删除时拒绝复用。探测命令结束后也会回收家目录。
+
+除了家目录，清理器还删除 `/tmp`、`/var/tmp`、`/dev/shm`、`/dev/mqueue` 和
+`/run/lock` 中属于该 UID 的对象，使用目录 FD 遍历且不跟随 symlink。不要挂载
+额外的任务可写共享卷；派生镜像新增公共可写目录时须一并扩展清理策略。
+Celery 队列的总并发数应按执行容器容量设置。单个常驻容器可处理多个不同 UID
+的任务，不会为每次作业创建容器。
+
+SDK 实时回传事件/状态并读取产物 rc，支持取消和超时。控制端严格校验 host key，
+拒绝危险的事件文件名、路径穿越、符号链接产物和过大归档；不将远端 PID 或环境
+传给 Core 状态回调。归档压缩大小上限 128 MiB、解压大小上限 512 MiB，任务输入
+文件总量上限 128 MiB；输入不支持 symlink / 特殊文件。
+
+```python
+from jms_ansible_executor.client import run
+
+result = run(
+    host="ansible-executor", port=2222,
+    private_key="/run/secrets/executor_client",
+    known_hosts="/run/secrets/executor_known_hosts",
+    private_data_dir="/private/job", inventory="/private/job/inventory/hosts",
+    playbook="main.yml", quiet=True,
+    event_handler=lambda event: print(event["event"]),
+)
+assert result.rc == 0
+```
+
+已验证 Core 的 Runner 2.4.0.2 和执行端上游 Runner 2.4.0 的 AdHoc、Playbook、
+上传、私钥路径及自定义模块兼容。SDK 迁移已知的 inventory 凭据字段、模块环境
+路径和 copy 的本地 src，保留目的地址及普通业务值。所有输入必须预先放在任务
+目录；不会自动读取或打包 Core 任意路径。Core 的完整配置和网域隧道要求见其
+`utils/ansible_executor/ssh-backend.md`。
 
 本实现仅应安装在专用执行容器内。`make install` 会安装专用 sshd PAM 配置，
 `--configure-nss` 会设置该容器的身份查询顺序，不能直接用于宿主机 SSH。
@@ -127,11 +170,15 @@ ansible-runner transmit ./job -p main.yml \
 
 测试目标直接扩展生产运行层，使用相同的 OpenSSH、PAM、glibc 和 Ansible，
 只额外安装编译器及复制源码用于 NSS 内存检查。
-测试客户端只依赖宿主机的 Python 标准库、Docker CLI、ssh 和 ssh-keygen。
+SSH 权限测试依赖 Python 标准库、Docker CLI、ssh 和 ssh-keygen；SDK 测试还需
+安装本项目及其 Paramiko / Runner 依赖。
 
 ```sh
 docker build --target test -t jumpserver-executor-ssh:test .
+python3 -m pip install .
+python3 -m unittest discover -s tests -p 'test_protocol.py' -v
 python3 tests/integration.py
+python3 tests/sdk_integration.py
 ```
 
 测试用临时密钥和临时容器，不启动 privileged 模式、不挂载 Docker socket，
@@ -140,6 +187,6 @@ python3 tests/integration.py
 命令拼接和转发；真实 Runner 传输/执行/事件返回；跨 UID 私有文件和环境变量
 读取被拒绝；任务环境不继承服务秘密、不污染后续会话。
 
-生产与测试均默认使用上游 Runner 2.4.0。此测试覆盖通用 Ansible 执行及 UID
+CI 同时验证上游 Runner 2.4.0 和 Core 的 Runner 2.4.0.2 客户端。此测试覆盖通用 Ansible 执行及 UID
 权限边界，不能替代 JumpServer 专用模块和业务作业的兼容性验证。
 CI 还会构建默认生产镜像，并用该镜像运行同一套集成测试。

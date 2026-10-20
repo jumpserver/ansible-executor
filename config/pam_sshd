@@ -2,5 +2,6 @@
 auth       required pam_deny.so
 account    required pam_permit.so
 password   required pam_deny.so
+session    requisite /usr/local/lib/security/pam_jms_executor.so
 session    required pam_mkhomedir.so skel=/etc/jms-executor/skel umask=0077 silent
 session    required pam_limits.so
