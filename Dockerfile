@@ -1,6 +1,6 @@
 FROM debian:trixie-slim AS nss-build
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc make libc6-dev \
+    && apt-get install -y --no-install-recommends gcc make libc6-dev libpam0g-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY . /src
 WORKDIR /src
@@ -17,6 +17,10 @@ RUN apt-get update \
     && python3 -m pip install --break-system-packages --no-cache-dir \
         "ansible-runner==${ANSIBLE_RUNNER_VERSION}"
 COPY --from=nss-build /out/ /
+COPY pyproject.toml LICENSE /opt/jms-executor/
+COPY src /opt/jms-executor/src
+RUN python3 -m pip install --break-system-packages --no-cache-dir --no-deps /opt/jms-executor \
+    && rm -rf /opt/jms-executor
 RUN /usr/local/libexec/jms-executor-start --configure-nss \
     && mkdir -p /etc/jms-executor/skel \
     && printf '* hard core 0\n* hard nproc 256\n* hard nofile 4096\n' > /etc/security/limits.d/jms-executor.conf
@@ -27,7 +31,7 @@ CMD []
 # Test the production runtime, adding only the tools needed for NSS sanitizers.
 FROM runtime AS test
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc make libc6-dev \
+    && apt-get install -y --no-install-recommends gcc make libc6-dev libpam0g-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY . /src
 WORKDIR /src

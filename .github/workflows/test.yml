@@ -14,6 +14,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install SDK and test client
+        run: python3 -m pip install . 'ansible-runner==2.4.0'
+      - name: Reject unsafe event and artifact streams
+        run: python3 -m unittest discover -s tests -p 'test_protocol.py' -v
       - name: Build Linux OpenSSH test image and check NSS
         run: docker build --target test -t jumpserver-executor-ssh:test .
       - name: Build production image
@@ -27,3 +34,13 @@ jobs:
         env:
           JMS_EXECUTOR_TEST_IMAGE: jumpserver-executor-ssh:runtime
         run: python3 tests/integration.py
+      - name: Run native SDK against upstream Runner
+        env:
+          JMS_EXECUTOR_TEST_IMAGE: jumpserver-executor-ssh:runtime
+        run: python3 tests/sdk_integration.py
+      - name: Check JumpServer Runner fork compatibility
+        env:
+          JMS_EXECUTOR_TEST_IMAGE: jumpserver-executor-ssh:runtime
+        run: |
+          python3 -m pip install --no-deps https://github.com/jumpserver-dev/ansible-runner/archive/refs/tags/v2.4.0.2.zip
+          python3 tests/sdk_integration.py

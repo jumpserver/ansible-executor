@@ -1,5 +1,9 @@
 libnss_jms_executor.so.2
 test_nss
+pam_jms_executor.so
+*.egg-info/
+build/
+dist/
 __pycache__/
 *.py[cod]
 .DS_Store

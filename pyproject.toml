@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jms-ansible-executor"
+version = "0.2.0"
+description = "SSH transport and isolated worker for JumpServer Ansible jobs"
+requires-python = ">=3.11"
+dependencies = ["paramiko>=3.5.1,<4", "ansible-runner>=2.4.0,<2.5"]
+license = "GPL-3.0-or-later"
+
+[tool.setuptools.packages.find]
+where = ["src"]

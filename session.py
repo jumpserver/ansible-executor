@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import pwd
+import re
 import stat
 import sys
 
@@ -52,7 +53,8 @@ def main():
     if sys.argv[1:] != ['-c', 'jms-executor-session']:
         raise RuntimeError('Only the executor forced command is supported')
     command = os.environ.get('SSH_ORIGINAL_COMMAND', '')
-    if command not in ('ansible-runner worker', 'jms-executor-info'):
+    managed = re.fullmatch(r'jms-executor-run ([0-9a-f-]{36})', command)
+    if command not in ('ansible-runner worker', 'jms-executor-info') and not managed:
         raise RuntimeError('Only ansible-runner worker and jms-executor-info are supported')
     account, home, temp = prepare_session()
     environment = {
@@ -70,7 +72,10 @@ def main():
         return
     # A new Python interpreter cannot import user files from cwd or PYTHONPATH
     # before ansible-runner has received and prepared the job.
-    os.execve(sys.executable, [sys.executable, '-I', '-m', 'ansible_runner', 'worker'], environment)
+    args = [sys.executable, '-I', '-m', 'jms_ansible_executor.worker']
+    if managed:
+        args.append(managed.group(1))
+    os.execve(sys.executable, args, environment)
 
 
 if __name__ == '__main__':

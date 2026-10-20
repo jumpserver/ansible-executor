@@ -90,6 +90,7 @@ def main():
     root_directory(HOME_ROOT, 0o711)
     root_directory(KEY_ROOT, 0o700)
     root_directory(RUNTIME_ROOT, 0o755)
+    root_directory(RUNTIME_ROOT / 'leases', 0o700)
     root_directory(Path('/run/sshd'), 0o755)
     root_directory(Path('/etc/jms-executor/skel'), 0o755)
     check_reserved_identities()
