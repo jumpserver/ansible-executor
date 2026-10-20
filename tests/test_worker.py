@@ -5,6 +5,20 @@ from jms_ansible_executor.worker import RelocatingWorker
 
 
 class WorkerPathTests(unittest.TestCase):
+    def test_gateway_password_file_and_key_are_relocated(self):
+        source = "/core/jobs/space and 'quote' 50%"
+        worker = RelocatingWorker(source_dir=source, private_data_dir='/task')
+        command = ['sshpass', '-f', (source + '/.gateway-password').replace('%', '%%'),
+                   'ssh', '-i', (source + '/.gateway-key').replace('%', '%%'),
+                   '-W', '%h:%p', '--', 'user@gateway']
+        args = shlex.join(['-o', 'ProxyCommand=' + shlex.join(command)])
+        actual = worker.inventory_paths({'ansible_ssh_common_args': args})
+        proxy = shlex.split(actual['ansible_ssh_common_args'])[1].removeprefix('ProxyCommand=')
+        expected = command.copy()
+        expected[2] = '/task/.gateway-password'
+        expected[5] = '/task/.gateway-key'
+        self.assertEqual(shlex.split(proxy), expected)
+
     def test_gateway_key_paths_are_relocated_without_changing_other_arguments(self):
         source = "/core/jobs/space and 'quote' 50%"
         worker = RelocatingWorker(source_dir=source, private_data_dir='/task')

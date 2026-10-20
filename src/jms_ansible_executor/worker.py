@@ -73,7 +73,7 @@ class RelocatingWorker(Worker):
                 if key in PATH_FIELDS:
                     result[key] = self.relocate(item)
                 elif key == 'ansible_ssh_common_args':
-                    result[key] = self.proxy_key_paths(item)
+                    result[key] = self.proxy_credential_paths(item)
                 else:
                     result[key] = self.inventory_paths(item)
             return result
@@ -81,7 +81,7 @@ class RelocatingWorker(Worker):
             return [self.inventory_paths(item) for item in value]
         return value
 
-    def proxy_key_paths(self, value):
+    def proxy_credential_paths(self, value):
         if not isinstance(value, str):
             return value
         arguments = shlex.split(value)
@@ -93,7 +93,10 @@ class RelocatingWorker(Worker):
                 continue
             parts = shlex.split(command)
             for position in range(1, len(parts)):
-                if parts[position - 1] != '-i':
+                password_file = (
+                    position == 2 and os.path.basename(parts[0]) == 'sshpass' and parts[1] == '-f'
+                )
+                if parts[position - 1] != '-i' and not password_file:
                     continue
                 # Core escapes literal percent signs for OpenSSH's token expansion.
                 original = parts[position].replace('%%', '%')

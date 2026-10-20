@@ -169,10 +169,13 @@ assert result.rc == 0
 
 集成测试覆盖上游 Runner 2.4.0 和 Core 的 Runner 2.4.0.2 客户端与当前执行镜像
 的 AdHoc、Playbook、上传、私钥路径及自定义模块兼容。执行端迁移已知的 inventory
-凭据字段、网关 ProxyCommand 的 `-i` 私钥路径、SSH 包装脚本、模块环境路径和 copy
+凭据字段、网关 ProxyCommand 的 `-i` 私钥和 `sshpass -f` 密码文件路径、SSH 包装脚本、模块环境路径和 copy
 的本地 src，保留目的地址及普通业务值。所有输入必须预先放在任务
 目录；不会自动读取或打包 Core 任意路径。Core 的完整配置和网域隧道要求见其
 `utils/ansible_executor/ssh-backend.md`。
+
+密码网关使用任务私有目录中的 `0600` 文件，密码不放入 SSH 或 sshpass 命令行。
+跨 UID 集成测试覆盖进程参数中没有密码、其他 UID 无法读取密码文件以及任务结束后的清理。
 
 本实现仅应安装在专用执行容器内。`make install` 会安装专用 sshd PAM 配置，
 `--configure-nss` 会设置该容器的身份查询顺序，不能直接用于宿主机 SSH。

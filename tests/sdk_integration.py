@@ -1,4 +1,5 @@
 """Real SDK and upstream/fork Runner interoperability checks."""
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import shlex
@@ -145,6 +146,97 @@ print('SSH_WRAPPERS_OK')
             self.assertEqual(result.rc, 0, events)
             self.assertTrue(any(e.get('event_data', {}).get('res', {}).get('stdout')
                                 == 'SSH_WRAPPERS_OK' for e in events), events)
+
+    def test_gateway_password_file_is_not_exposed_to_another_uid(self):
+        password = "test-only 'quoted' 50%% password"
+        with tempfile.TemporaryDirectory(prefix="gateway '50% ") as root:
+            options = self.prepare(root)
+            credential = Path(root) / '.gateway-password'
+            credential.write_text(password)
+            credential.chmod(0o600)
+            # A real sshpass/TTY exchange, held open so another UID can inspect /proc.
+            prompt = (
+                "import os,pathlib,termios,time; fd=os.open('/dev/tty',os.O_RDWR); "
+                "attrs=termios.tcgetattr(fd); attrs[3]&=~termios.ECHO; "
+                "termios.tcsetattr(fd,termios.TCSANOW,attrs); "
+                "os.write(fd,b'Password: '); value=os.read(fd,4096).decode().rstrip('\\n'); "
+                "assert value==pathlib.Path('.gateway-password').read_text(); "
+                "pathlib.Path('.authenticated').touch(); time.sleep(30)"
+            )
+            command = ['sshpass', '-f', str(credential).replace('%', '%%'),
+                       '/usr/bin/python3', '-c', prompt]
+            inventory = Path(options['inventory'])
+            hosts = json.loads(inventory.read_text())
+            hosts['all']['hosts']['executor_test']['ansible_ssh_common_args'] = shlex.join(
+                ['-o', 'ProxyCommand=' + shlex.join(command)])
+            inventory.write_text(json.dumps(hosts))
+            (Path(root) / 'project/victim.py').write_text('''
+import json, pathlib, shlex, subprocess
+root = pathlib.Path(__file__).resolve().parent.parent
+host = json.loads((root / 'inventory/hosts').read_text())['all']['hosts']['executor_test']
+command = shlex.split(shlex.split(host['ansible_ssh_common_args'])[1].split('=', 1)[1])
+subprocess.run(command, cwd=root, check=True)
+''')
+            (Path(root) / 'project/main.yml').write_text(json.dumps([{
+                'hosts': 'all', 'gather_facts': False, 'tasks': [{'ansible.builtin.command': {
+                    'argv': ['/usr/bin/python3', '{{ playbook_dir }}/victim.py'],
+                }}],
+            }]))
+            observer = '''
+import json, pathlib, sys
+secret = sys.stdin.buffer.read()
+credential = None
+for path in pathlib.Path('/proc').glob('[0-9]*/cmdline'):
+    try:
+        if path.stat().st_uid != 100010:
+            continue
+        command = path.read_bytes()
+    except (OSError, ProcessLookupError):
+        continue
+    assert secret not in command, 'Gateway password leaked in a process argument'
+    args = command.split(b'\\0')
+    if len(args) > 2 and args[:2] == [b'sshpass', b'-f']:
+        credential = pathlib.Path(args[2].decode())
+if credential is None:
+    sys.exit(3)
+try:
+    credential.read_bytes()
+except PermissionError:
+    pass
+else:
+    raise AssertionError('Another UID read the gateway password file')
+print(json.dumps({'credential': str(credential), 'isolated': True}))
+'''
+            canceled = threading.Event()
+            events = []
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(run, **self.options, **options, playbook='main.yml',
+                                     cancel_callback=canceled.is_set, event_handler=events.append)
+                try:
+                    for _ in range(100):
+                        checked = Fixture.container(
+                            'runuser', '-u', 'jms_11', '--', '/usr/bin/python3', '-c', observer,
+                            input=password.encode(), check=False)
+                        if checked.returncode != 3:
+                            break
+                        time.sleep(0.1)
+                    self.assertEqual(checked.returncode, 0, checked.stderr.decode() + str([
+                        event.get('event_data', {}).get('res')
+                        for event in events if event['event'] == 'runner_on_failed'
+                    ]))
+                    credential_path = json.loads(checked.stdout)['credential']
+                    self.assertTrue(credential_path.startswith('/home/jms-executor/jms_10/'))
+                    for _ in range(50):
+                        ready = Fixture.container(
+                            'test', '-f', str(Path(credential_path).parent / '.authenticated'), check=False)
+                        if ready.returncode == 0:
+                            break
+                        time.sleep(0.1)
+                    self.assertEqual(ready.returncode, 0, 'sshpass did not authenticate using the file')
+                finally:
+                    canceled.set()
+                self.assertEqual(future.result(timeout=15).status, 'canceled')
+            Fixture.wait_removed('/home/jms-executor/jms_10')
 
     def test_streaming_cancellation_timeout_and_uid_reuse(self):
         with tempfile.TemporaryDirectory() as root:
