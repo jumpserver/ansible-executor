@@ -35,7 +35,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     outputs:
-      branch_image: ${{ steps.image.outputs.name }}
+      branch_tag: ${{ steps.image.outputs.tag }}
     env:
       CANDIDATE: jumpserver/ansible-executor:build-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
     steps:
@@ -48,7 +48,7 @@ jobs:
         if: github.repository == 'jumpserver/ansible-executor' && github.ref_type == 'branch' && github.event_name != 'pull_request'
         run: |
           tag=$(python3 .github/image_tag.py)
-          echo "name=jumpserver/ansible-executor:$tag" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - name: Install SDK and test client
         run: python3 -m pip install . 'ansible-runner==2.4.0'
       - name: Check task paths and reject unsafe event and artifact streams
@@ -108,7 +108,7 @@ jobs:
     timeout-minutes: 15
     env:
       CANDIDATE: jumpserver/ansible-executor:build-${{ github.run_id }}-${{ github.run_attempt }}
-      BRANCH_IMAGE: ${{ needs.integration.outputs.branch_image }}
+      BRANCH_IMAGE: jumpserver/ansible-executor:${{ needs.integration.outputs.branch_tag }}
     steps:
       - uses: docker/setup-buildx-action@v3
       - uses: actions/download-artifact@v4
