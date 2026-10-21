@@ -114,7 +114,7 @@ Python 包在构建时安装，任务运行时不修改公共环境。
 因此安装所有业务驱动。JumpServer 自定义模块仍由 Core 随任务传入，以保证
 模块与 Playbook 一致。清单之外的 Collections、roles 或驱动需按业务补充。
 
-镜像构建与 Core 发版分开：`.github/workflows/test.yml` 在运行代码、Dockerfile、
+镜像构建与 Core 发版分开：`.github/workflows/build.yml` 在运行代码、Dockerfile、
 依赖或测试变化时自动构建；也支持手动运行以更新基础镜像和依赖。
 amd64、arm64 使用各自的原生 runner，完成 NSS、SSH 和两种 Runner 集成测试后，
 推送本次实际测试的镜像，组合为 `build-<run_id>-<run_attempt>` 多架构候选版本。
