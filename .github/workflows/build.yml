@@ -14,7 +14,7 @@ on:
       - config/**
       - src/**
       - tests/**
-      - .github/workflows/test.yml
+      - .github/workflows/build.yml
   pull_request:
   workflow_dispatch:
 
