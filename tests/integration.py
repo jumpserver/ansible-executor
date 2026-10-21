@@ -36,7 +36,8 @@ class ExecutorSSHTest(unittest.TestCase):
         run(
             'docker', 'run', '-d', '--name', cls.name, '--security-opt', 'no-new-privileges:true',
             '--pids-limit', '256', '--memory', '1g',
-            '--tmpfs', '/run', '--tmpfs', '/home/jms-executor', '--tmpfs', '/var/lib/jms-executor',
+            '--tmpfs', '/run', '--tmpfs', '/home/jms-executor:exec,nosuid,nodev',
+            '--tmpfs', '/var/lib/jms-executor',
             '--mount', f'type=bind,src={cls.key}.pub,dst=/run/secrets/jms-executor.pub,readonly',
             '-e', 'EXECUTOR_SERVICE_SECRET=must-not-reach-jobs',
             '-p', '127.0.0.1::2222', IMAGE,
@@ -123,10 +124,11 @@ class ExecutorSSHTest(unittest.TestCase):
         }]
         payload = {
             'project/main.yml': json.dumps(playbook),
-            'inventory/hosts': json.dumps({'all': {'hosts': {'localhost': {
+            'inventory/hosts': json.dumps({'all': {'hosts': {'executor_test': {
                 'ansible_connection': 'local', 'ansible_python_interpreter': '/usr/bin/python3',
             }}}}),
-            'env/envvars': json.dumps(envvars or {}),
+            # Core's fork permits localhost only for trusted system automation.
+            'env/envvars': json.dumps({'ANSIBLE_SUPER_MODE': '1', **(envvars or {})}),
         }
         create_inputs = (
             'import json, pathlib, sys; root=pathlib.Path(sys.argv[1]); '

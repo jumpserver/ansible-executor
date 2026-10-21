@@ -1,0 +1,22 @@
+# Image-only dependencies, aligned with JumpServer Core's Ansible environment.
+# Keep the JumpServer forks: upstream packages do not include Core's changes.
+ansible-core @ https://github.com/jumpserver-dev/ansible/archive/refs/tags/v2.16.18.5.zip
+ansible-runner @ https://github.com/jumpserver-dev/ansible-runner/archive/refs/tags/v2.4.0.2.zip
+ansible==9.13.0
+boto3==1.42.93
+botocore==1.42.93
+paramiko==3.5.1
+# Match Core's crypto stack; passlib 1.7.4 cannot use bcrypt 5.
+bcrypt==4.0.1
+cryptography==46.0.7
+passlib==1.7.4
+s3transfer==0.16.0
+sshtunnel==0.4.0
+pywinrm==0.4.3
+telnetlib3==4.0.2
+mysqlclient==2.2.4
+psycopg2-binary==2.9.12
+pymssql==2.3.10
+pymongo==4.6.3
+oracledb==3.4.2
+pyfreerdp==0.0.4

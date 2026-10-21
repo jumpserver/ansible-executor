@@ -46,26 +46,31 @@ namespace 或每任务 cgroup。默认 `/proc` 下，其他用户的进程名称
 
 ## 构建运行
 
-Dockerfile 直接基于通用 `debian:trixie-slim` 构建，不依赖现成的 JumpServer
-镜像或 Core 源码。镜像提供 OpenSSH、PAM、NSS 插件、Python、`ansible-core`、
-`ansible-runner`、SSH 客户端和 `sshpass`。当前入口使用 Runner 的流式 worker
-协议，因此只安装 `ansible` / `ansible-core` 不够，还需要 `ansible-runner`。
-默认构建不包含编译器和测试源码。以下命令均从本仓库根目录执行。
+Dockerfile 默认基于 `debian:trixie-slim` 构建，不依赖旧的 JumpServer Docker
+执行镜像或 Core 源码。可用 `--build-arg BASE_IMAGE=你的镜像:版本` 替换兼容
+Debian 的基础镜像；构建和运行阶段使用同一基础环境。其他发行版还需适配
+系统包安装及 PAM/NSS 配置。
+镜像提供 OpenSSH、PAM、NSS 插件、Python、JumpServer 定制的 Ansible/Runner、
+业务 Collections 和驱动。默认构建不包含编译器、wheel 缓存和测试源码。
+以下命令均从本仓库根目录执行。
 
 ```sh
-docker build -t jumpserver/ansible-executor-ssh:local .
+docker build -t jumpserver/ansible-executor-ssh:latest .
 
 mkdir -m 700 executor-secrets
 ssh-keygen -q -t ed25519 -N '' -f executor-secrets/client
 docker run -d --name jms-ansible-executor \
   --security-opt no-new-privileges:true \
   --memory 1g --pids-limit 256 \
-  --tmpfs /run --tmpfs /home/jms-executor \
+  --tmpfs /run --tmpfs /home/jms-executor:exec,nosuid,nodev \
   --mount type=volume,src=jms-executor-host-key,dst=/var/lib/jms-executor \
   --mount "type=bind,src=$PWD/executor-secrets/client.pub,dst=/run/secrets/jms-executor.pub,readonly" \
   -p 127.0.0.1:2222:2222 \
-  jumpserver/ansible-executor-ssh:local
+  jumpserver/ansible-executor-ssh:latest
 ```
+
+任务目录需要 `exec`，用于运行随任务上传的 SSH 包装脚本等文件；
+保留 `nosuid,nodev` 和 `no-new-privileges`，任务仍以独立的非 root UID 执行。
 
 通过可信部署通道取得 host key，而不是关闭 host key 检查：
 
@@ -97,18 +102,37 @@ ansible-runner transmit ./job -p main.yml \
 
 ## 作业依赖
 
-通用镜像支持 Ansible 内置模块，不预装全部业务依赖：
+`requirements-runtime.txt` 定义镜像内的业务依赖，包括 JumpServer Ansible
+`v2.16.18.5`、Runner `v2.4.0.2`、`ansible==9.13.0` 提供的 Collections，
+以及 AWS、MySQL、PostgreSQL、SQL Server、MongoDB、Oracle、WinRM、RDP 等驱动。
+系统运行库和编译依赖分别放在 Dockerfile 的 `base`、`build` 阶段。
+Python 包在构建时安装，任务运行时不修改公共环境。
+定制版 Ansible 默认限制 localhost/local connection；受信任的系统自动化
+任务可单独传入 `ANSIBLE_SUPER_MODE=1`，不要在容器中全局开启。
 
-- 额外 collections / roles：随任务打包，或者制作派生镜像预安装。
-- JumpServer 自定义模块：由调用方随任务传递，并为当前任务配置模块搜索路径；
-  SSH 后端接入时也要重写模块、私钥和上传文件的远端路径。
-- 数据库、WinRM 等驱动：例如 `pymssql`、`psycopg2`、`oracledb`、`pywinrm`，
-  以及它们依赖的系统库，按实际作业需要安装到派生镜像。
-- Core 使用的 JumpServer Ansible/Runner 分支与这里的上游版本不是同一套依赖。
-  集成前需要验证兼容性；如依赖特定分支，应在派生镜像中安装匹配版本。
+`pyproject.toml` 继续只声明 SDK/执行器程序自身的依赖，Core 安装 SDK 不会
+因此安装所有业务驱动。JumpServer 自定义模块仍由 Core 随任务传入，以保证
+模块与 Playbook 一致。清单之外的 Collections、roles 或驱动需按业务补充。
 
-默认 Runner 为 `2.4.0`，可通过 `--build-arg ANSIBLE_RUNNER_VERSION=...` 指定
-其他上游版本。控制端和执行端应使用匹配的 Runner 版本；版本变更后重跑集成测试。
+镜像构建与 Core 发版分开：`.github/workflows/test.yml` 在运行代码、Dockerfile、
+依赖或测试变化时自动构建；也支持手动运行以更新基础镜像和依赖。
+amd64、arm64 使用各自的原生 runner，完成 NSS、SSH 和两种 Runner 集成测试后，
+推送本次实际测试的镜像，组合为 `build-<run_id>-<run_attempt>` 多架构候选版本。
+只有上游仓库 `master` 的 push / 手动运行可以发布，PR 和 fork 不使用发布凭据。
+仓库需设置 Actions secrets `DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`（有权推送
+`jumpserver/ansible-executor-ssh`）。`latest` 和 `dev` 指向成功构建的候选镜像，当前安装器仍可使用 `latest`。
+
+工作流输出 `ansible-executor-image.txt` artifact 和 digest，保留源码提交及每个架构
+测试通过的镜像 digest。发布阶段使用这些 digest 组合 manifest，不重新 build。
+工作流重试时继续使用对应测试任务的 artifact，不依赖上次尝试的可变 tag。
+
+手动构建：在上游仓库 Actions 中选择 **Build and test SSH executor**，点击
+**Run workflow**，分支选择 `master`。需要先合并此工作流并配置上述 secrets；
+手动触发与代码变更触发使用同样的测试和发布流程。
+本次仅发布候选版本及 `latest` / `dev`，不生成 Core 的正式版本 tag。
+后续 CI 集成将固定已验证的 digest，制作安装包并映射为 `v5.1.0` 等产品版本；
+没有执行器变化的产品版本将复用原 digest，不在发版时重新构建。
+CPU 兼容范围需要在目标硬件上验证，`linux/amd64` 标签不代表具体指令集基线。
 
 ## UID 生命周期与 Core 接入
 
@@ -157,11 +181,15 @@ result = run(
 assert result.rc == 0
 ```
 
-已验证 Core 的 Runner 2.4.0.2 和执行端上游 Runner 2.4.0 的 AdHoc、Playbook、
-上传、私钥路径及自定义模块兼容。SDK 迁移已知的 inventory 凭据字段、模块环境
-路径和 copy 的本地 src，保留目的地址及普通业务值。所有输入必须预先放在任务
+集成测试覆盖上游 Runner 2.4.0 和 Core 的 Runner 2.4.0.2 客户端与当前执行镜像
+的 AdHoc、Playbook、上传、私钥路径及自定义模块兼容。执行端迁移已知的 inventory
+凭据字段、网关 ProxyCommand 的 `-i` 私钥和 `sshpass -f` 密码文件路径、SSH 包装脚本、模块环境路径和 copy
+的本地 src，保留目的地址及普通业务值。所有输入必须预先放在任务
 目录；不会自动读取或打包 Core 任意路径。Core 的完整配置和网域隧道要求见其
 `utils/ansible_executor/ssh-backend.md`。
+
+密码网关使用任务私有目录中的 `0600` 文件，密码不放入 SSH 或 sshpass 命令行。
+跨 UID 集成测试覆盖进程参数中没有密码、其他 UID 无法读取密码文件以及任务结束后的清理。
 
 本实现仅应安装在专用执行容器内。`make install` 会安装专用 sshd PAM 配置，
 `--configure-nss` 会设置该容器的身份查询顺序，不能直接用于宿主机 SSH。
@@ -176,7 +204,7 @@ SSH 权限测试依赖 Python 标准库、Docker CLI、ssh 和 ssh-keygen；SDK 
 ```sh
 docker build --target test -t jumpserver-executor-ssh:test .
 python3 -m pip install .
-python3 -m unittest discover -s tests -p 'test_protocol.py' -v
+python3 -m unittest discover -s tests -p 'test_*.py' -v
 python3 tests/integration.py
 python3 tests/sdk_integration.py
 ```
