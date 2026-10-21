@@ -117,7 +117,8 @@ Python 包在构建时安装，任务运行时不修改公共环境。
 镜像构建与 Core 发版分开：`.github/workflows/build.yml` 在运行代码、Dockerfile、
 依赖或测试变化时自动构建；也支持手动运行以更新基础镜像和依赖。
 amd64、arm64 使用各自的原生 runner，完成 NSS、SSH 和两种 Runner 集成测试后，
-推送本次实际测试的镜像，组合为 `build-<run_id>-<run_attempt>` 多架构候选版本。
+按 digest 上传本次实际测试的镜像，再组合为当前分支的多架构镜像。
+不推送 `build-*`、`build-*-amd64`、`build-*-arm64` 等中间 tag。
 只有上游仓库的分支 push / 手动运行可以发布，PR 和 fork 不使用发布凭据。
 `pr@…`、`repr@…` 分支仅通过 PR 运行测试，不自动 push 镜像。
 仓库需设置 Actions secrets `DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`（有权推送
@@ -131,13 +132,14 @@ amd64、arm64 使用各自的原生 runner，完成 NSS、SSH 和两种 Runner �
 本地构建示例使用 `local`，也不会覆盖本地的旧 `latest`。
 
 工作流输出 `ansible-executor-image.txt` artifact 和 digest，保留源码提交及每个架构
-测试通过的镜像 digest。发布阶段使用这些 digest 组合 manifest，不重新 build。
+测试通过的镜像 digest。镜像直接从本地测试镜像导出，按 digest 上传；发布阶段
+使用这些 digest 组合 manifest，不重新 build，也不创建带架构后缀的 tag。
 工作流重试时继续使用对应测试任务的 artifact，不依赖上次尝试的可变 tag。
 
 手动构建：在上游仓库 Actions 中选择 **Build and test SSH executor**，点击
 **Run workflow**，分支选择 `master`。需要先合并此工作流并配置上述 secrets；
 手动触发与代码变更触发使用同样的测试和发布流程。
-本 workflow 仅构建分支镜像和候选版本，不响应 Git tag，也不生成 Core 的正式版本 tag。
+本 workflow 仅发布分支 tag，不响应 Git tag，也不生成 Core 的正式版本 tag。
 后续 CI 集成将固定已验证的 digest，制作安装包并映射为 `v5.1.0` 等产品版本；
 没有执行器变化的产品版本将复用原 digest，不在发版时重新构建。
 CPU 兼容范围需要在目标硬件上验证，`linux/amd64` 标签不代表具体指令集基线。

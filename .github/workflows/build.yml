@@ -37,7 +37,7 @@ jobs:
     outputs:
       branch_tag: ${{ steps.image.outputs.tag }}
     env:
-      CANDIDATE: jumpserver/ansible-executor:build-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+      TEST_IMAGE: jumpserver-executor:local
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -58,7 +58,7 @@ jobs:
       - name: Build production image
         run: >-
           docker build --label org.opencontainers.image.revision="$GITHUB_SHA"
-          -t "$CANDIDATE" .
+          -t "$TEST_IMAGE" .
       - name: Check NSS with memory sanitizers
         run: >-
           docker run --rm --network none --entrypoint /bin/sh
@@ -66,34 +66,51 @@ jobs:
           'make clean && make check CFLAGS="-O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer"'
       - name: Run SSH and Ansible integration tests
         env:
-          JMS_EXECUTOR_TEST_IMAGE: ${{ env.CANDIDATE }}
+          JMS_EXECUTOR_TEST_IMAGE: ${{ env.TEST_IMAGE }}
         run: python3 tests/integration.py
       - name: Run native SDK against upstream Runner
         env:
-          JMS_EXECUTOR_TEST_IMAGE: ${{ env.CANDIDATE }}
+          JMS_EXECUTOR_TEST_IMAGE: ${{ env.TEST_IMAGE }}
         run: python3 tests/sdk_integration.py
       - name: Check JumpServer Runner fork compatibility
         env:
-          JMS_EXECUTOR_TEST_IMAGE: ${{ env.CANDIDATE }}
+          JMS_EXECUTOR_TEST_IMAGE: ${{ env.TEST_IMAGE }}
         run: |
           python3 -m pip install --no-deps https://github.com/jumpserver-dev/ansible-runner/archive/refs/tags/v2.4.0.2.zip
           python3 tests/sdk_integration.py
+      - name: Install crane
+        run: |
+          arch=$(uname -m)
+          [[ "$arch" != aarch64 ]] || arch=arm64
+          archive="go-containerregistry_Linux_$arch.tar.gz"
+          url=https://github.com/google/go-containerregistry/releases/download/v0.21.6
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 "$url/$archive" -o "$archive"
+          curl -fsSL --retry 3 "$url/checksums.txt" -o crane-checksums.txt
+          grep " $archive\$" crane-checksums.txt | sha256sum --check -
+          tar -xzf "$archive" crane
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Check digest-only publishing against a local registry
+        run: python3 tests/publish_integration.py
       - name: Log in to Docker Hub
         if: github.repository == 'jumpserver/ansible-executor' && github.ref_type == 'branch' && github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Push the tested image
+      - name: Push the tested image by digest
         if: github.repository == 'jumpserver/ansible-executor' && github.ref_type == 'branch' && github.event_name != 'pull_request'
         env:
           ARCH: ${{ matrix.arch }}
         run: |
-          docker push "$CANDIDATE"
-          digest=$(docker buildx imagetools inspect "$CANDIDATE" --format '{{.Manifest.Digest}}')
+          archive="$RUNNER_TEMP/executor.tar"
+          trap 'rm -f "$archive"' EXIT
+          docker save "$TEST_IMAGE" -o "$archive"
+          digest=$(crane digest --tarball "$archive")
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           mkdir -p image-digests
-          printf 'docker.io/jumpserver/ansible-executor@%s\n' "$digest" > "image-digests/$ARCH"
+          crane push "$archive" "docker.io/jumpserver/ansible-executor@$digest" \
+            --image-refs "image-digests/$ARCH"
       - uses: actions/upload-artifact@v4
         if: github.repository == 'jumpserver/ansible-executor' && github.ref_type == 'branch' && github.event_name != 'pull_request'
         with:
@@ -107,7 +124,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      CANDIDATE: jumpserver/ansible-executor:build-${{ github.run_id }}-${{ github.run_attempt }}
       BRANCH_IMAGE: jumpserver/ansible-executor:${{ needs.integration.outputs.branch_tag }}
     steps:
       - uses: docker/setup-buildx-action@v3
@@ -120,19 +136,18 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Publish tested multi-architecture candidate
+      - name: Publish tested multi-architecture branch image
         run: |
-          docker buildx imagetools create -t "$CANDIDATE" \
+          docker buildx imagetools create -t "$BRANCH_IMAGE" --metadata-file manifest.json \
             "$(cat image-digests/amd64)" "$(cat image-digests/arm64)"
-          digest=$(docker buildx imagetools inspect "$CANDIDATE" --format '{{.Manifest.Digest}}')
+          digest=$(jq -er '."containerimage.descriptor".digest' manifest.json)
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           image="docker.io/jumpserver/ansible-executor@$digest"
           docker buildx imagetools inspect "$image" --raw | jq -e \
             '([.manifests[].platform | select(.os == "linux") | .architecture] | sort) == ["amd64", "arm64"]'
-          docker buildx imagetools create -t "$BRANCH_IMAGE" "$image"
           printf '%s\n' "$image" > ansible-executor-image.txt
-          printf 'Branch image: `%s`\n\nCandidate: `%s`\n\nSource commit: `%s`\n\nPinned image: `%s`\n' \
-            "$BRANCH_IMAGE" "$CANDIDATE" "$GITHUB_SHA" "$image" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Branch image: `%s`\n\nSource commit: `%s`\n\nPinned image: `%s`\n' \
+            "$BRANCH_IMAGE" "$GITHUB_SHA" "$image" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: ansible-executor-image
