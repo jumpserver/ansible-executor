@@ -55,7 +55,7 @@ Debian 的基础镜像；构建和运行阶段使用同一基础环境。其他�
 以下命令均从本仓库根目录执行。
 
 ```sh
-docker build -t jumpserver/ansible-executor-ssh:latest .
+docker build -t jumpserver/ansible-executor:local .
 
 mkdir -m 700 executor-secrets
 ssh-keygen -q -t ed25519 -N '' -f executor-secrets/client
@@ -66,7 +66,7 @@ docker run -d --name jms-ansible-executor \
   --mount type=volume,src=jms-executor-host-key,dst=/var/lib/jms-executor \
   --mount "type=bind,src=$PWD/executor-secrets/client.pub,dst=/run/secrets/jms-executor.pub,readonly" \
   -p 127.0.0.1:2222:2222 \
-  jumpserver/ansible-executor-ssh:latest
+  jumpserver/ansible-executor:local
 ```
 
 任务目录需要 `exec`，用于运行随任务上传的 SSH 包装脚本等文件；
@@ -118,9 +118,17 @@ Python 包在构建时安装，任务运行时不修改公共环境。
 依赖或测试变化时自动构建；也支持手动运行以更新基础镜像和依赖。
 amd64、arm64 使用各自的原生 runner，完成 NSS、SSH 和两种 Runner 集成测试后，
 推送本次实际测试的镜像，组合为 `build-<run_id>-<run_attempt>` 多架构候选版本。
-只有上游仓库 `master` 的 push / 手动运行可以发布，PR 和 fork 不使用发布凭据。
+只有上游仓库的分支 push / 手动运行可以发布，PR 和 fork 不使用发布凭据。
+`pr@…`、`repr@…` 分支仅通过 PR 运行测试，不自动 push 镜像。
 仓库需设置 Actions secrets `DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`（有权推送
-`jumpserver/ansible-executor-ssh`）。`latest` 和 `dev` 指向成功构建的候选镜像，当前安装器仍可使用 `latest`。
+`jumpserver/ansible-executor`）。成功后更新当前分支标签，例如 `master`、`dev`、`v5`；
+分支名中的 `/` 等 Docker tag 不支持的字符替换为 `-`，开头的 `.` / `-` 替换为 `_`。
+避免使用替换后重名的分支；转换后超过 128 字符的名称会拒绝发布。
+
+`jumpserver/ansible-executor:latest` 保留给已经发布的旧版 Core，新 workflow 不更新它。
+新 SSH 执行器与旧版 Core 不兼容，安装新版本时必须使用配套的分支或版本标签。
+`latest`、`build-*` 和 `v5.1.0` 等正式版本格式的分支名会被拒绝，防止覆盖保留标签。
+本地构建示例使用 `local`，也不会覆盖本地的旧 `latest`。
 
 工作流输出 `ansible-executor-image.txt` artifact 和 digest，保留源码提交及每个架构
 测试通过的镜像 digest。发布阶段使用这些 digest 组合 manifest，不重新 build。
@@ -129,7 +137,7 @@ amd64、arm64 使用各自的原生 runner，完成 NSS、SSH 和两种 Runner �
 手动构建：在上游仓库 Actions 中选择 **Build and test SSH executor**，点击
 **Run workflow**，分支选择 `master`。需要先合并此工作流并配置上述 secrets；
 手动触发与代码变更触发使用同样的测试和发布流程。
-本次仅发布候选版本及 `latest` / `dev`，不生成 Core 的正式版本 tag。
+本 workflow 仅构建分支镜像和候选版本，不响应 Git tag，也不生成 Core 的正式版本 tag。
 后续 CI 集成将固定已验证的 digest，制作安装包并映射为 `v5.1.0` 等产品版本；
 没有执行器变化的产品版本将复用原 digest，不在发版时重新构建。
 CPU 兼容范围需要在目标硬件上验证，`linux/amd64` 标签不代表具体指令集基线。
