@@ -114,10 +114,24 @@ Python 包在构建时安装，任务运行时不修改公共环境。
 因此安装所有业务驱动。JumpServer 自定义模块仍由 Core 随任务传入，以保证
 模块与 Playbook 一致。清单之外的 Collections、roles 或驱动需按业务补充。
 
-镜像统一使用 `jumpserver/ansible-executor-ssh:latest`，独立于 Core 发版。
-运行依赖或执行器变化后重建镜像，发布前回归任务执行、日志、停止及主要业务。
-升级时显式拉取并重新创建容器；离线部署需加载更新后的镜像，不能只检查
-本地是否存在 `latest`。部署记录应保留源码提交和镜像 digest，以便定位和回退。
+镜像构建与 Core 发版分开：`.github/workflows/test.yml` 在运行代码、Dockerfile、
+依赖或测试变化时自动构建；也支持手动运行以更新基础镜像和依赖。
+amd64、arm64 使用各自的原生 runner，完成 NSS、SSH 和两种 Runner 集成测试后，
+推送本次实际测试的镜像，组合为 `build-<run_id>-<run_attempt>` 多架构候选版本。
+只有上游仓库 `master` 的 push / 手动运行可以发布，PR 和 fork 不使用发布凭据。
+仓库需设置 Actions secrets `DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`（有权推送
+`jumpserver/ansible-executor-ssh`）。`latest` 和 `dev` 指向成功构建的候选镜像，当前安装器仍可使用 `latest`。
+
+工作流输出 `ansible-executor-image.txt` artifact 和 digest，保留源码提交及每个架构
+测试通过的镜像 digest。发布阶段使用这些 digest 组合 manifest，不重新 build。
+工作流重试时继续使用对应测试任务的 artifact，不依赖上次尝试的可变 tag。
+
+手动构建：在上游仓库 Actions 中选择 **Build and test SSH executor**，点击
+**Run workflow**，分支选择 `master`。需要先合并此工作流并配置上述 secrets；
+手动触发与代码变更触发使用同样的测试和发布流程。
+本次仅发布候选版本及 `latest` / `dev`，不生成 Core 的正式版本 tag。
+后续 CI 集成将固定已验证的 digest，制作安装包并映射为 `v5.1.0` 等产品版本；
+没有执行器变化的产品版本将复用原 digest，不在发版时重新构建。
 CPU 兼容范围需要在目标硬件上验证，`linux/amd64` 标签不代表具体指令集基线。
 
 ## UID 生命周期与 Core 接入
