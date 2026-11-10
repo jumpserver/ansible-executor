@@ -10,9 +10,12 @@ branch_tag = runpy.run_path(
 
 
 class ImageTagTest(unittest.TestCase):
+    def test_master_uses_installer_development_tag(self):
+        self.assertEqual(branch_tag('master'), 'dev')
+
     def test_branch_tags(self):
         for branch, tag in (
-            ('master', 'master'), ('dev', 'dev'), ('v5', 'v5'),
+            ('dev', 'dev'), ('v5', 'v5'),
             ('feature/runtime', 'feature-runtime'), ('.runtime', '_runtime'),
         ):
             with self.subTest(branch=branch):
