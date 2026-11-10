@@ -4,6 +4,8 @@ import re
 
 
 def branch_tag(branch):
+    if branch == 'master':
+        branch = 'dev'  # Match the installer's dev-ce / dev-ee image tag.
     tag = re.sub(r'[^a-zA-Z0-9_.-]+', '-', branch)
     tag = re.sub(r'^[.-]+', '_', tag)
     if not tag or len(tag) > 128:

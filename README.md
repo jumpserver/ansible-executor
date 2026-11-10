@@ -122,9 +122,12 @@ amd64、arm64 使用各自的原生 runner，完成 NSS、SSH 和两种 Runner �
 只有上游仓库的分支 push / 手动运行可以发布，PR 和 fork 不使用发布凭据。
 `pr@…`、`repr@…` 分支仅通过 PR 运行测试，不自动 push 镜像。
 仓库需设置 Actions secrets `DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`（有权推送
-`jumpserver/ansible-executor`）。成功后更新当前分支标签，例如 `master`、`dev`、`v5`；
+`jumpserver/ansible-executor`）。`master` 成功构建后发布 `:dev`，与安装器的
+`dev-ce` / `dev-ee` 对齐；不再更新 `:master`，使用该标签的部署需切换到 `:dev`。
+Docker Hub 和 `registry.fit2cloud.com` 使用相同标签。其他分支按分支名发布，例如 `v5`；
 分支名中的 `/` 等 Docker tag 不支持的字符替换为 `-`，开头的 `.` / `-` 替换为 `_`。
-避免使用替换后重名的分支；转换后超过 128 字符的名称会拒绝发布。
+避免使用映射后重名的分支（包括与 `master` 共用 `:dev` 的独立 `dev` 分支）；
+转换后超过 128 字符的名称会拒绝发布。
 
 `jumpserver/ansible-executor:latest` 保留给已经发布的旧版 Core，新 workflow 不更新它。
 新 SSH 执行器与旧版 Core 不兼容，安装新版本时必须使用配套的分支或版本标签。
