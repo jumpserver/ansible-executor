@@ -103,7 +103,7 @@ ansible-runner transmit ./job -p main.yml \
 ## 作业依赖
 
 `requirements-runtime.txt` 定义镜像内的业务依赖，包括 JumpServer Ansible
-`v2.16.18.5`、Runner `v2.4.0.2`、`ansible==9.13.0` 提供的 Collections，
+`v2.16.18.6`、Runner `v2.4.0.2`、`ansible==9.13.0` 提供的 Collections，
 以及 AWS、MySQL、PostgreSQL、SQL Server、MongoDB、Oracle、WinRM、RDP 等驱动。
 系统运行库和编译依赖分别放在 Dockerfile 的 `base`、`build` 阶段。
 Python 包在构建时安装，任务运行时不修改公共环境。
