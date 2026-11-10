@@ -1,6 +1,6 @@
 # Image-only dependencies, aligned with JumpServer Core's Ansible environment.
 # Keep the JumpServer forks: upstream packages do not include Core's changes.
-ansible-core @ https://github.com/jumpserver-dev/ansible/archive/refs/tags/v2.16.18.5.zip
+ansible-core @ https://github.com/jumpserver-dev/ansible/archive/refs/tags/v2.16.18.6.zip
 ansible-runner @ https://github.com/jumpserver-dev/ansible-runner/archive/refs/tags/v2.4.0.2.zip
 ansible==9.13.0
 boto3==1.42.93
