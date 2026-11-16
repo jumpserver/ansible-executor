@@ -19,4 +19,10 @@ psycopg2-binary==2.9.12
 pymssql==2.3.10
 pymongo==4.6.3
 oracledb==3.4.2
+PyMySQL==1.2.4
+clickhouse-driver==0.2.11
+sqlparse==0.6.0
+dmPython==2.6.1; sys_platform == 'linux'
+# IBM currently publishes no Linux aarch64 CLI wheel; do not break ARM images.
+ibm-db==3.3.0; platform_machine != 'aarch64'
 pyfreerdp==0.0.4
