@@ -28,7 +28,9 @@ COPY --from=build /out/ /
 # Keep Debian-owned Python packages intact; application wheels live in /usr/local.
 RUN --mount=type=bind,from=build,source=/wheels,target=/wheels \
     python3 -m pip install --break-system-packages --ignore-installed --no-cache-dir --no-index /wheels/*.whl \
-    && python3 -m pip check
+    && python3 -m pip check \
+    && python3 -c "import dmPython, clickhouse_driver, pymysql" \
+    && python3 -c "import importlib, platform; importlib.import_module('ibm_db') if platform.machine() != 'aarch64' else None"
 RUN /usr/local/libexec/jms-executor-start --configure-nss \
     && mkdir -p /etc/jms-executor/skel \
     && printf '* hard core 0\n* hard nproc 256\n* hard nofile 4096\n' > /etc/security/limits.d/jms-executor.conf
