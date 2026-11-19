@@ -12,6 +12,8 @@ import zipfile
 MAX_LINE = 8 * 1024 * 1024
 MAX_ARCHIVE = 128 * 1024 * 1024
 MAX_EXPANDED = 512 * 1024 * 1024
+# Task inputs can include multiple 10 GiB application image archives.
+MAX_TASK_INPUT = 32 * 1024 * 1024 * 1024
 
 
 class ProtocolError(RuntimeError):
@@ -31,8 +33,10 @@ def json_line(stream):
     return value
 
 
-def safe_archive(stream, length, destination):
-    if type(length) is not int or not 0 < length <= MAX_ARCHIVE:
+def safe_archive(stream, length, destination, *, task_input=False):
+    archive_limit = MAX_TASK_INPUT if task_input else MAX_ARCHIVE
+    expanded_limit = MAX_TASK_INPUT if task_input else MAX_EXPANDED
+    if type(length) is not int or not 0 < length <= archive_limit:
         raise ProtocolError('Invalid artifact archive length')
     with tempfile.TemporaryFile() as archive:
         encoded_remaining = 4 * ((length + 2) // 3)
@@ -58,7 +62,7 @@ def safe_archive(stream, length, destination):
         root.mkdir(mode=0o700, parents=True, exist_ok=True)
         with zipfile.ZipFile(archive) as zipped:
             members = zipped.infolist()
-            if len(members) > 100000 or sum(item.file_size for item in members) > MAX_EXPANDED:
+            if len(members) > 100000 or sum(item.file_size for item in members) > expanded_limit:
                 raise ProtocolError('Artifact archive exceeds resource limits')
             seen = set()
             # Validate the whole manifest before extracting even a single file.
@@ -95,6 +99,9 @@ def safe_archive(stream, length, destination):
                             raise ProtocolError('Truncated artifact member')
                         output.write(chunk)
                         remaining -= len(chunk)
+                    # SSH wrappers and executable inventories must remain executable.
+                    if task_input and item.external_attr >> 16 & 0o100:
+                        os.fchmod(output.fileno(), 0o700)
 
 
 def receive(stream, private_data_dir, event_handler=None, status_handler=None, quiet=False):

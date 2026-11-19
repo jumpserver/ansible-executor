@@ -1,10 +1,26 @@
+import base64
+import io
 import shlex
+import tempfile
 import unittest
+from unittest.mock import patch
+
+from test_protocol import message, zipped
 
 from jms_ansible_executor.worker import RelocatingWorker
 
 
 class WorkerPathTests(unittest.TestCase):
+    def test_duplicate_task_archive_is_rejected_before_execution(self):
+        raw = zipped([('file', 'input')])
+        archive = message({'zipfile': len(raw)}) + base64.b64encode(raw)
+        stream = message({'kwargs': {}}) + archive + archive + message({'eof': True})
+        with tempfile.TemporaryDirectory() as root, patch('ansible_runner.run') as execute:
+            worker = RelocatingWorker(private_data_dir=root, _input=io.BytesIO(stream), _output=io.BytesIO())
+            with self.assertRaisesRegex(ValueError, 'Duplicate task archive'):
+                worker.run()
+            execute.assert_not_called()
+
     def test_gateway_password_file_and_key_are_relocated(self):
         source = "/core/jobs/space and 'quote' 50%"
         worker = RelocatingWorker(source_dir=source, private_data_dir='/task')

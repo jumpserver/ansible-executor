@@ -8,8 +8,7 @@ import uuid
 
 import ansible_runner
 from ansible_runner.streaming import Worker
-from ansible_runner.utils.streaming import unstream_dir
-from .protocol import json_line, MAX_ARCHIVE
+from .protocol import json_line, safe_archive
 
 PATH_FIELDS = {
     'ansible_ssh_private_key_file', 'ansible_private_key_file', 'private_key_path',
@@ -31,6 +30,7 @@ class RelocatingWorker(Worker):
         self._begin_keepalive()
         try:
             options = None
+            archive_received = False
             while True:
                 message = json_line(self._input)
                 if 'kwargs' in message:
@@ -38,10 +38,10 @@ class RelocatingWorker(Worker):
                         raise ValueError('Invalid task options')
                     options = message['kwargs']
                 elif 'zipfile' in message:
-                    length = message['zipfile']
-                    if type(length) is not int or not 0 < length <= MAX_ARCHIVE:
-                        raise ValueError('Invalid task archive')
-                    unstream_dir(self._input, length, self.private_data_dir)
+                    if archive_received:
+                        raise ValueError('Duplicate task archive')
+                    safe_archive(self._input, message['zipfile'], self.private_data_dir, task_input=True)
+                    archive_received = True
                 elif message.get('eof') is True:
                     break
                 else:

@@ -1,6 +1,7 @@
 """Real SDK and upstream/fork Runner interoperability checks."""
 from concurrent.futures import ThreadPoolExecutor
 import json
+import os
 from pathlib import Path
 import shlex
 import tempfile
@@ -147,6 +148,34 @@ print('SSH_WRAPPERS_OK')
             self.assertTrue(any(e.get('event_data', {}).get('res', {}).get('stdout')
                                 == 'SSH_WRAPPERS_OK' for e in events), events)
 
+    def test_large_inputs_use_private_disk_storage_and_are_cleaned(self):
+        with tempfile.TemporaryDirectory() as root:
+            options = self.prepare(root)
+            # Exceed both the previous 128 MiB transport and 512 MiB expansion limits.
+            with (Path(root) / 'project/image.tar').open('wb') as image:
+                for _ in range(160):
+                    image.write(os.urandom(1024 * 1024))
+                image.truncate(600 * 1024 * 1024)
+            code = '''
+import json, os, pathlib, stat, tempfile
+root = pathlib.Path.cwd()
+temp = pathlib.Path(tempfile.gettempdir())
+assert root.joinpath('project/image.tar').stat().st_size == 600 * 1024 * 1024
+assert temp.parent == pathlib.Path('/tmp')
+assert temp.stat().st_uid == os.getuid()
+assert stat.S_IMODE(temp.stat().st_mode) == 0o700
+assert temp.stat().st_dev != pathlib.Path.home().stat().st_dev
+print(json.dumps({'large_input_temp': str(temp)}))
+'''
+            events = []
+            result = run(**self.options, **options, module='command',
+                         module_args='/usr/bin/python3 -c ' + shlex.quote(code),
+                         event_handler=events.append)
+            self.assertEqual((result.status, result.rc), ('successful', 0), events)
+            output = next(e['event_data']['res']['stdout'] for e in events
+                          if e.get('event') == 'runner_on_ok')
+            Fixture.wait_removed(json.loads(output)['large_input_temp'])
+
     def test_gateway_password_file_is_not_exposed_to_another_uid(self):
         password = "test-only 'quoted' 50%% password"
         with tempfile.TemporaryDirectory(prefix="gateway '50% ") as root:
@@ -225,7 +254,7 @@ print(json.dumps({'credential': str(credential), 'isolated': True}))
                         for event in events if event['event'] == 'runner_on_failed'
                     ]))
                     credential_path = json.loads(checked.stdout)['credential']
-                    self.assertTrue(credential_path.startswith('/home/jms-executor/jms_10/'))
+                    self.assertTrue(credential_path.startswith('/tmp/jms-executor-100010-'))
                     for _ in range(50):
                         ready = Fixture.container(
                             'test', '-f', str(Path(credential_path).parent / '.authenticated'), check=False)
@@ -237,6 +266,7 @@ print(json.dumps({'credential': str(credential), 'isolated': True}))
                     canceled.set()
                 self.assertEqual(future.result(timeout=15).status, 'canceled')
             Fixture.wait_removed('/home/jms-executor/jms_10')
+            Fixture.wait_removed(credential_path)
 
     def test_streaming_cancellation_timeout_and_uid_reuse(self):
         with tempfile.TemporaryDirectory() as root:

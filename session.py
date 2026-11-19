@@ -8,6 +8,7 @@ import pwd
 import re
 import stat
 import sys
+import tempfile
 
 
 def prepare_session():
@@ -35,15 +36,8 @@ def prepare_session():
         raise OSError(ctypes.get_errno(), 'Unable to disable privilege escalation')
 
     os.umask(0o077)
-    temp = home / 'tmp'
-    try:
-        temp.mkdir(mode=0o700)
-    except FileExistsError:
-        pass
-    info = temp.lstat()
-    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != uid
-            or stat.S_IMODE(info.st_mode) != 0o700):
-        raise RuntimeError('Expected a private temporary directory')
+    # Large task archives belong on disk, not the home tmpfs; PAM cleans this UID's files.
+    temp = Path(tempfile.mkdtemp(prefix=f'jms-executor-{uid}-', dir='/tmp'))
     os.chdir(home)
     return account, home, temp
 
