@@ -14,7 +14,7 @@ import uuid
 import ansible_runner
 import paramiko
 
-from .protocol import json_line, receive, ProtocolError, MAX_ARCHIVE
+from .protocol import json_line, receive, ProtocolError, MAX_TASK_INPUT
 
 
 @dataclass
@@ -116,8 +116,8 @@ def run(*, host, private_key, known_hosts, port=2222, job_id=None,
         if stat.S_ISLNK(info.st_mode) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
             raise ValueError('Task inputs must be regular files and directories')
         total += info.st_size if stat.S_ISREG(info.st_mode) else 0
-        if total > MAX_ARCHIVE:
-            raise ValueError('Task inputs exceed the 128 MiB transport limit')
+        if total > MAX_TASK_INPUT:
+            raise ValueError('Task inputs exceed the 32 GiB transport limit')
     deadline = time.monotonic() + job_timeout if job_timeout and job_timeout > 0 else None
     stopped = threading.Event()
     client = None

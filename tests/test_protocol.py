@@ -5,6 +5,7 @@ from pathlib import Path
 import stat
 import tempfile
 import unittest
+from unittest.mock import patch
 import uuid
 import zipfile
 
@@ -31,11 +32,45 @@ class ProtocolTest(unittest.TestCase):
         for entries in ([('../escaped', 'secret')], [('/tmp/escaped', 'secret')],
                         [('safe', 'a'), ('safe', 'b')], [(symlink, '../escaped')],
                         [('a\\b', 'a')], [('.', 'a')]):
-            with self.subTest(entries=entries), tempfile.TemporaryDirectory() as root:
-                raw = zipped(entries)
-                with self.assertRaises(ProtocolError):
-                    safe_archive(io.BytesIO(base64.b64encode(raw)), len(raw), root)
-                self.assertEqual(list(Path(root).iterdir()), [])
+            for task_input in (False, True):
+                with self.subTest(entries=entries, task_input=task_input), tempfile.TemporaryDirectory() as root:
+                    raw = zipped(entries)
+                    with self.assertRaises(ProtocolError):
+                        safe_archive(io.BytesIO(base64.b64encode(raw)), len(raw), root, task_input=task_input)
+                    self.assertEqual(list(Path(root).iterdir()), [])
+
+    def test_task_input_limits_do_not_raise_artifact_limits(self):
+        raw = zipped([('image.tar', b'x' * 1024)])
+        with tempfile.TemporaryDirectory() as root, patch.multiple(
+            'jms_ansible_executor.protocol', MAX_ARCHIVE=128, MAX_EXPANDED=512,
+            MAX_TASK_INPUT=2048,
+        ):
+            safe_archive(io.BytesIO(base64.b64encode(raw)), len(raw), root, task_input=True)
+            self.assertEqual((Path(root) / 'image.tar').stat().st_size, 1024)
+            with self.assertRaises(ProtocolError):
+                safe_archive(io.BytesIO(base64.b64encode(raw)), len(raw), root)
+            for length in (2049, 0, -1, True):
+                with self.subTest(length=length), self.assertRaises(ProtocolError):
+                    safe_archive(io.BytesIO(), length, root, task_input=True)
+
+    def test_task_expansion_is_bounded_and_executable_bit_is_preserved(self):
+        executable = zipfile.ZipInfo('wrapper')
+        executable.external_attr = (stat.S_IFREG | 0o4755) << 16
+        data = io.BytesIO()
+        with zipfile.ZipFile(data, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr('large', b'x' * 4096)
+        raw = data.getvalue()
+        with tempfile.TemporaryDirectory() as root, patch(
+            'jms_ansible_executor.protocol.MAX_TASK_INPUT', 2048,
+        ):
+            with self.assertRaises(ProtocolError):
+                safe_archive(io.BytesIO(base64.b64encode(raw)), len(raw), root, task_input=True)
+            self.assertEqual(list(Path(root).iterdir()), [])
+        for task_input, mode in ((False, 0o600), (True, 0o700)):
+            with self.subTest(task_input=task_input), tempfile.TemporaryDirectory() as root:
+                raw = zipped([(executable, '#!/bin/sh\n')])
+                safe_archive(io.BytesIO(base64.b64encode(raw)), len(raw), root, task_input=task_input)
+                self.assertEqual(stat.S_IMODE((Path(root) / 'wrapper').stat().st_mode), mode)
 
     def test_rejects_existing_symlink_parent_and_truncated_archive(self):
         with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as outside:
