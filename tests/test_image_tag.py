@@ -10,8 +10,8 @@ branch_tag = runpy.run_path(
 
 
 class ImageTagTest(unittest.TestCase):
-    def test_master_uses_installer_development_tag(self):
-        self.assertEqual(branch_tag('master'), 'dev')
+    def test_master_keeps_jenkins_source_tag(self):
+        self.assertEqual(branch_tag('master'), 'master')
 
     def test_branch_tags(self):
         for branch, tag in (
