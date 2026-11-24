@@ -10,6 +10,16 @@ import sys
 import time
 
 
+def open_pidfd(pid):
+    try:
+        return os.pidfd_open(pid)
+    except OSError as exc:
+        if exc.errno != errno.ENOSYS:
+            raise
+    # EL8 backports pidfd_send_signal for proc directory FDs, but not pidfd_open.
+    return os.open(f'/proc/{pid}', os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
+
+
 def clean_shared(uid, deadline):
     # A task can bypass TMPDIR. UID reuse must not expose its 0600 files, FIFOs
     # or shared-memory objects in the image's public directories.
@@ -40,6 +50,11 @@ def clean_shared(uid, deadline):
 def clean(uid):
     if os.geteuid() != 0 or not 100001 <= uid <= 165535:
         raise RuntimeError('Invalid cleanup identity')
+    fd = open_pidfd(os.getpid())
+    try:
+        signal.pidfd_send_signal(fd, 0)
+    finally:
+        os.close(fd)
     deadline = time.monotonic() + 5
     while True:
         alive = False
@@ -49,7 +64,7 @@ def clean(uid):
             fd = None
             try:
                 # pidfd binds the signal to this process, even if its numeric PID is reused.
-                fd = os.pidfd_open(int(entry.name))
+                fd = open_pidfd(int(entry.name))
                 status = dict(line.split(':', 1) for line in (entry / 'status').read_text().splitlines())
                 if str(uid) not in status['Uid'].split() or status['State'].strip().startswith('Z'):
                     continue

@@ -95,6 +95,13 @@ jobs:
         run: |
           python3 -m pip install --no-deps https://github.com/jumpserver-dev/ansible-runner/archive/refs/tags/v2.4.0.2.zip
           python3 tests/sdk_integration.py
+      - name: Check EL8 cleanup without pidfd_open
+        env:
+          JMS_EXECUTOR_TEST_IMAGE: ${{ env.TEST_IMAGE }}
+          JMS_EXECUTOR_TEST_NO_PIDFD: '1'
+        run: |
+          python3 tests/integration.py
+          python3 tests/sdk_integration.py
       - name: Install crane
         run: |
           arch=$(uname -m)

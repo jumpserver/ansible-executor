@@ -33,14 +33,22 @@ class ExecutorSSHTest(unittest.TestCase):
         for key in (cls.key, cls.wrong_key):
             run('ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(key))
         cls.name = 'jms-executor-test-' + uuid.uuid4().hex[:12]
+        legacy_args = []
+        legacy_command = []
+        if os.environ.get('JMS_EXECUTOR_TEST_NO_PIDFD') == '1':
+            legacy_args = [
+                '--mount', f'type=bind,src={Path(__file__).with_name("no_pidfd.py").resolve()},dst=/no_pidfd.py,readonly',
+                '--entrypoint', '/usr/bin/python3',
+            ]
+            legacy_command = ['/no_pidfd.py']
         run(
             'docker', 'run', '-d', '--name', cls.name, '--security-opt', 'no-new-privileges:true',
             '--pids-limit', '256', '--memory', '1g',
-            '--tmpfs', '/run', '--tmpfs', '/home/jms-executor:exec,nosuid,nodev',
+            '--tmpfs', '/run:mode=0755', '--tmpfs', '/home/jms-executor:exec,nosuid,nodev',
             '--tmpfs', '/var/lib/jms-executor',
             '--mount', f'type=bind,src={cls.key}.pub,dst=/run/secrets/jms-executor.pub,readonly',
             '-e', 'EXECUTOR_SERVICE_SECRET=must-not-reach-jobs',
-            '-p', '127.0.0.1::2222', IMAGE,
+            '-p', '127.0.0.1::2222', *legacy_args, IMAGE, *legacy_command,
         )
         cls.addClassCleanup(lambda: run('docker', 'rm', '-f', cls.name, check=False))
         published = run('docker', 'port', cls.name, '2222/tcp', check=False)
@@ -311,6 +319,35 @@ print('ISOLATION_OK')
         self.assertEqual(self.ssh('jms_9', 'jms-executor-info').returncode, 0)
         status = self.container('cat', f'/proc/{int(orphan.stdout)}/status', check=False)
         self.assertTrue(status.returncode != 0 or b'State:\tZ' in status.stdout)
+
+    def test_process_handle_remains_bound_after_exit(self):
+        script = '''
+import os, runpy, signal, subprocess
+cleanup = runpy.run_path('/usr/local/libexec/jms-executor-clean')
+other = subprocess.Popen(['/usr/bin/sleep', '60'], user=100013, group=100013, extra_groups=())
+owned = subprocess.Popen(['/usr/bin/sleep', '60'], user=100012, group=100012, extra_groups=())
+fd = None
+try:
+    fd = cleanup['open_pidfd'](owned.pid)
+    signal.pidfd_send_signal(fd, signal.SIGKILL)
+    assert owned.wait(timeout=5) == -9
+    try:
+        signal.pidfd_send_signal(fd, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    else:
+        raise AssertionError('A stale process handle accepted a signal')
+    assert other.poll() is None, 'Cleanup killed another UID'
+finally:
+    if fd is not None:
+        os.close(fd)
+    for child in (other, owned):
+        if child.poll() is None:
+            child.kill()
+        child.wait()
+'''
+        wrapper = ('/no_pidfd.py', '/usr/bin/python3') if os.environ.get('JMS_EXECUTOR_TEST_NO_PIDFD') == '1' else ()
+        self.container('/usr/bin/python3', *wrapper, '-I', '-c', script)
 
 
 if __name__ == '__main__':
