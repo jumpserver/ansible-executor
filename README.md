@@ -164,10 +164,13 @@ ANSIBLE_EXECUTOR_KNOWN_HOSTS: /run/secrets/executor_known_hosts
 
 SDK 为每个任务单独连接并选择编号。服务端 PAM session 模块在 root monitor 中
 持有 UID 独占锁；并发复用同一个 UID 会被拒绝，SDK 最多尝试 16 个候选编号。
-任务拿到服务端租用确认前不发送目录或凭据。家目录在任务结束、取消、断连后
-删除，并使用 pidfd 清理该 UID 的全部残留进程（包括 setsid 后台进程），再释放
-锁。登录前也做清理，恢复崩溃 monitor 留下的进程和私有文件。进程清理失败或
-文件无法删除时拒绝复用。探测命令结束后也会回收家目录。
+任务拿到服务端租用确认前不发送目录或凭据。任务结束、取消或断连后，先清理
+该 UID 的全部残留进程（包括 setsid 后台进程），再删除家目录并释放锁。支持
+pidfd_open 的内核继续使用 pidfd；EL8 返回 `ENOSYS` 时打开 `/proc/PID` 目录，
+通过已回移植的 `pidfd_send_signal` 发送信号。两种句柄均绑定原进程，防止 PID
+复用导致误杀；不退回按数字 PID 调用 `kill`。内核不支持安全信号接口时拒绝登录。
+登录前也做清理，恢复崩溃 monitor 留下的进程和私有文件。进程清理失败或文件
+无法删除时拒绝复用。探测命令结束后也会回收家目录。
 
 除了家目录，清理器还删除 `/tmp`、`/var/tmp`、`/dev/shm`、`/dev/mqueue` 和
 `/run/lock` 中属于该 UID 的对象，使用目录 FD 遍历且不跟随 symlink。不要挂载
