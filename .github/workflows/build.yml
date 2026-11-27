@@ -3,6 +3,9 @@ name: Build and test SSH executor
 on:
   push:
     branches: ['**', '!pr@**', '!repr@**']
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
     paths:
       - Dockerfile
       - .dockerignore
@@ -28,6 +31,7 @@ concurrency:
 
 jobs:
   integration:
+    if: github.event_name != 'push' || !github.event.deleted
     strategy:
       fail-fast: false
       matrix:
@@ -39,7 +43,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     outputs:
-      branch_tag: ${{ steps.image.outputs.tag }}
+      image_tag: ${{ steps.image.outputs.tag }}
     env:
       TEST_IMAGE: jumpserver-executor:local
     steps:
@@ -47,9 +51,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Select branch image tag
+      - name: Select image tag
         id: image
-        if: github.repository == 'jumpserver/ansible-executor' && github.ref_type == 'branch' && github.event_name != 'pull_request'
+        if: github.repository == 'jumpserver/ansible-executor' && github.event_name != 'pull_request' && (github.ref_type == 'branch' || github.event_name == 'push')
         run: |
           tag=$(python3 .github/image_tag.py)
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
@@ -117,13 +121,13 @@ jobs:
       - name: Check digest-only publishing against a local registry
         run: python3 tests/publish_integration.py
       - name: Log in to Docker Hub
-        if: github.repository == 'jumpserver/ansible-executor' && github.ref_type == 'branch' && github.event_name != 'pull_request'
+        if: steps.image.outputs.tag != ''
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Push the tested image by digest
-        if: github.repository == 'jumpserver/ansible-executor' && github.ref_type == 'branch' && github.event_name != 'pull_request'
+        if: steps.image.outputs.tag != ''
         env:
           ARCH: ${{ matrix.arch }}
         run: |
@@ -136,7 +140,7 @@ jobs:
           crane push "$archive" "docker.io/jumpserver/ansible-executor@$digest" \
             --image-refs "image-digests/$ARCH"
       - uses: actions/upload-artifact@v4
-        if: github.repository == 'jumpserver/ansible-executor' && github.ref_type == 'branch' && github.event_name != 'pull_request'
+        if: steps.image.outputs.tag != ''
         with:
           name: executor-digest-${{ matrix.arch }}
           path: image-digests/*
@@ -144,12 +148,12 @@ jobs:
 
   publish:
     needs: integration
-    if: github.repository == 'jumpserver/ansible-executor' && github.ref_type == 'branch' && github.event_name != 'pull_request'
+    if: needs.integration.outputs.image_tag != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      BRANCH_IMAGE: jumpserver/ansible-executor:${{ needs.integration.outputs.branch_tag }}
-      MIRROR_IMAGE: registry.fit2cloud.com/jumpserver/ansible-executor:${{ needs.integration.outputs.branch_tag }}
+      PUBLISH_IMAGE: jumpserver/ansible-executor:${{ needs.integration.outputs.image_tag }}
+      MIRROR_IMAGE: ${{ github.ref_type == 'branch' && format('registry.fit2cloud.com/jumpserver/ansible-executor:{0}', needs.integration.outputs.image_tag) || '' }}
     steps:
       - uses: docker/setup-buildx-action@v3
       - uses: actions/download-artifact@v4
@@ -162,24 +166,29 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: docker/login-action@v3
+        if: env.MIRROR_IMAGE != ''
         with:
           registry: registry.fit2cloud.com
           username: ${{ secrets.HARBOR_USERNAME }}
           password: ${{ secrets.HARBOR_TOKEN }}
-      - name: Publish tested multi-architecture branch image
+      - name: Publish tested multi-architecture image
         run: |
-          docker buildx imagetools create -t "$BRANCH_IMAGE" --metadata-file manifest.json \
+          docker buildx imagetools create -t "$PUBLISH_IMAGE" --metadata-file manifest.json \
             "$(cat image-digests/amd64)" "$(cat image-digests/arm64)"
           digest=$(jq -er '."containerimage.descriptor".digest' manifest.json)
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           image="docker.io/jumpserver/ansible-executor@$digest"
           docker buildx imagetools inspect "$image" --raw | jq -e \
             '([.manifests[].platform | select(.os == "linux") | .architecture] | sort) == ["amd64", "arm64"]'
-          docker buildx imagetools create -t "$MIRROR_IMAGE" "$image"
-          [[ "$(docker buildx imagetools inspect "$MIRROR_IMAGE" --format '{{.Manifest.Digest}}')" == "$digest" ]]
+          printf 'Docker Hub image: `%s`\n\n' "$PUBLISH_IMAGE" >> "$GITHUB_STEP_SUMMARY"
+          if [[ -n "$MIRROR_IMAGE" ]]; then
+            docker buildx imagetools create -t "$MIRROR_IMAGE" "$image"
+            [[ "$(docker buildx imagetools inspect "$MIRROR_IMAGE" --format '{{.Manifest.Digest}}')" == "$digest" ]]
+            printf 'Mirror image: `%s`\n\n' "$MIRROR_IMAGE" >> "$GITHUB_STEP_SUMMARY"
+          fi
           printf '%s\n' "$image" > ansible-executor-image.txt
-          printf 'Branch image: `%s`\n\nMirror image: `%s`\n\nSource commit: `%s`\n\nPinned image: `%s`\n' \
-            "$BRANCH_IMAGE" "$MIRROR_IMAGE" "$GITHUB_SHA" "$image" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Source commit: `%s`\n\nPinned image: `%s`\n' \
+            "$GITHUB_SHA" "$image" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: ansible-executor-image

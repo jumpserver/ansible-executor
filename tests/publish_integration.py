@@ -16,7 +16,7 @@ workflow = yaml.safe_load((source / '.github/workflows/build.yml').read_text())
 push = next(s['run'] for s in workflow['jobs']['integration']['steps']
             if s.get('name') == 'Push the tested image by digest')
 publish = next(s['run'] for s in workflow['jobs']['publish']['steps']
-               if s.get('name') == 'Publish tested multi-architecture branch image')
+               if s.get('name') == 'Publish tested multi-architecture image')
 
 
 def run(*args, **kwargs):
@@ -50,7 +50,7 @@ with tempfile.TemporaryDirectory(prefix='jms-digest-publish-') as directory:
             repo, mirror = (address + '/executor' for address in addresses)
             (root / 'Dockerfile').write_text('FROM scratch\nCOPY payload /payload\n')
             (root / 'payload').write_text('digest-only publishing test\n')
-            env = dict(os.environ, RUNNER_TEMP=directory, BRANCH_IMAGE=repo + ':master',
+            env = dict(os.environ, RUNNER_TEMP=directory, PUBLISH_IMAGE=repo + ':master',
                        MIRROR_IMAGE=mirror + ':master',
                        GITHUB_STEP_SUMMARY=str(root / 'summary'), GITHUB_SHA='test-source')
             for arch in ('amd64', 'arm64'):
@@ -87,7 +87,16 @@ with tempfile.TemporaryDirectory(prefix='jms-digest-publish-') as directory:
                         config = json.loads(run('crane', 'config', registry_repo + '@' + child['digest']))
                         assert config['architecture'] == child['platform']['architecture']
             assert digests[0] == digests[1], 'Retry changed the published image'
-            print('PASS: both registries share the digest and architectures; latest is unchanged; retries create no extra tags')
+            release_image = repo + ':v0.1.2'
+            env.update(PUBLISH_IMAGE=release_image, MIRROR_IMAGE='')
+            run('bash', '-e', '-o', 'pipefail', '-c',
+                publish.replace('docker.io/jumpserver/ansible-executor', repo), cwd=root, env=env)
+            assert run('crane', 'digest', release_image) == digests[0]
+            assert (root / 'ansible-executor-image.txt').read_text().strip() == repo + '@' + digests[0]
+            assert sorted(run('crane', 'ls', repo).splitlines()) == ['latest', 'master', 'v0.1.2']
+            assert sorted(run('crane', 'ls', mirror).splitlines()) == ['latest', 'master']
+            assert run('crane', 'digest', repo + ':latest') == legacy_digest
+            print('PASS: branch images share a digest, and the version tag is published only to the primary registry')
         finally:
             for registry in registries:
                 registry.terminate()

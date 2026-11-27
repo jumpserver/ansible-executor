@@ -1,4 +1,4 @@
-"""Select the mutable branch tag without overwriting legacy or release images."""
+"""Select the Docker image tag for a branch or an executor release."""
 import os
 import re
 
@@ -14,5 +14,14 @@ def branch_tag(branch):
     return tag
 
 
+def release_tag(tag):
+    pattern = r'v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9][a-zA-Z0-9_.-]*)?'
+    if len(tag) > 128 or not re.fullmatch(pattern, tag):
+        raise ValueError(f'Expected an executor version tag such as v0.1.2 or v0.1.2-rc.1: {tag}')
+    return tag
+
+
 if __name__ == '__main__':
-    print(branch_tag(os.environ['GITHUB_REF_NAME']))
+    ref_name = os.environ['GITHUB_REF_NAME']
+    ref_type = os.environ.get('GITHUB_REF_TYPE')
+    print(release_tag(ref_name) if ref_type == 'tag' else branch_tag(ref_name))

@@ -1,12 +1,14 @@
-"""Keep branch publishing away from legacy, release and candidate tags."""
+"""Check branch and release tags used for publishing."""
 from pathlib import Path
 import runpy
 import unittest
 
 
-branch_tag = runpy.run_path(
+image_tags = runpy.run_path(
     str(Path(__file__).resolve().parents[1] / '.github/image_tag.py')
-)['branch_tag']
+)
+branch_tag = image_tags['branch_tag']
+release_tag = image_tags['release_tag']
 
 
 class ImageTagTest(unittest.TestCase):
@@ -32,3 +34,14 @@ class ImageTagTest(unittest.TestCase):
         for branch in ('', 'x' * 129):
             with self.subTest(branch=branch), self.assertRaises(ValueError):
                 branch_tag(branch)
+
+    def test_release_tags_preserve_the_git_tag(self):
+        for tag in ('v0.1.2', 'v0.1.2-rc.1', 'v0.1.2-' + 'x' * 121):
+            with self.subTest(tag=tag):
+                self.assertEqual(release_tag(tag), tag)
+
+    def test_invalid_release_tags_are_rejected(self):
+        for tag in ('master', 'latest', 'v5', '0.1.2', 'v0.1.2-', 'v0.1.2/rc.1',
+                    'v0.1.2-' + 'x' * 122):
+            with self.subTest(tag=tag), self.assertRaises(ValueError):
+                release_tag(tag)
