@@ -121,4 +121,4 @@ Image publishing and integration checks are defined in the
 
 ## License
 
-[GPL-3.0-or-later](LICENSE)
+[GPL-3.0 license](LICENSE)
