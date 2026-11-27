@@ -121,4 +121,6 @@ Image publishing and integration checks are defined in the
 
 ## License
 
-[GPL-3.0-or-later](LICENSE)
+Copyright (c) 2014-2026 FIT2CLOUD, All rights reserved.
+
+Licensed under the GNU General Public License version 3 (GPLv3), consistent with the [JumpServer main repository](https://github.com/jumpserver/jumpserver). See [LICENSE](LICENSE) for the full license text.
